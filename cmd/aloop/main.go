@@ -1,0 +1,235 @@
+package main
+
+import (
+	"context"
+	"encoding/json"
+	"errors"
+	"flag"
+	"fmt"
+	"io"
+	"log/slog"
+	"os"
+	"os/exec"
+	"os/signal"
+	"path/filepath"
+	"syscall"
+	"time"
+
+	"github.com/kelos-dev/aloop"
+	"github.com/kelos-dev/aloop/backend"
+	"github.com/kelos-dev/aloop/internal/personal"
+)
+
+type modelConfig struct {
+	Provider     string   `json:"provider"`
+	Model        string   `json:"model"`
+	BaseURL      string   `json:"base_url"`
+	KeyEnv       string   `json:"key_env"`
+	CodexHome    string   `json:"codex_home"`
+	RunThreshold *float64 `json:"run_threshold,omitempty"`
+}
+
+type config struct {
+	Prompt        string      `json:"prompt"`
+	Triage        modelConfig `json:"triage"`
+	Worker        modelConfig `json:"worker"`
+	Maildir       string      `json:"maildir"`
+	Inbox         string      `json:"inbox"`
+	Notifications string      `json:"notifications"`
+	Timezone      string      `json:"timezone"`
+	DailyAt       string      `json:"daily_at"`
+}
+
+func makeModel(c modelConfig) (aloop.Model, error) {
+	if c.RunThreshold != nil {
+		return nil, errors.New("run_threshold applies only to Decisions triage")
+	}
+	var env []string
+	for _, name := range []string{"HOME", "PATH", "LANG", "TMPDIR", "SystemRoot"} {
+		if value, ok := os.LookupEnv(name); ok {
+			env = append(env, name+"="+value)
+		}
+	}
+	switch c.Provider {
+	case "openai-compatible":
+		key := c.KeyEnv
+		if key == "" {
+			key = "OPENAI_API_KEY"
+		}
+		return backend.NewAPI(c.BaseURL, c.Model, os.Getenv(key))
+	case "claude-code":
+		bin, err := exec.LookPath("claude")
+		if err != nil {
+			return nil, err
+		}
+		return backend.NewClaude(bin, c.Model, os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"), env)
+	case "codex":
+		bin, err := exec.LookPath("codex")
+		if err != nil {
+			return nil, err
+		}
+		home, err := codexHome(c.CodexHome)
+		if err != nil {
+			return nil, err
+		}
+		return backend.NewCodex(bin, c.Model, home, env)
+	default:
+		return nil, fmt.Errorf("unknown model provider %q", c.Provider)
+	}
+}
+
+func codexHome(configured string) (string, error) {
+	if configured != "" {
+		return configured, nil
+	}
+	if home := os.Getenv("CODEX_HOME"); home != "" {
+		return home, nil
+	}
+	home, err := os.UserHomeDir()
+	if err != nil {
+		return "", err
+	}
+	return filepath.Join(home, ".codex"), nil
+}
+
+func makeTriage(c modelConfig) (aloop.Triage, error) {
+	if c.Provider != "" && c.Provider != "openai-decisions" {
+		model, err := makeModel(c)
+		if err != nil {
+			return nil, err
+		}
+		return aloop.PromptTriage(model), nil
+	}
+	if c.BaseURL != "" || (c.Model != "" && c.Model != backend.DecisionsModel) {
+		return nil, errors.New("OpenAI Decisions uses the OpenAI endpoint and model " + backend.DecisionsModel)
+	}
+	if c.KeyEnv != "" && c.CodexHome != "" {
+		return nil, errors.New("choose either key_env or codex_home for Decisions")
+	}
+	key := os.Getenv("OPENAI_API_KEY")
+	home := c.CodexHome
+	if c.KeyEnv != "" {
+		key = os.Getenv(c.KeyEnv)
+		if key == "" {
+			return nil, fmt.Errorf("empty Decisions credential %s", c.KeyEnv)
+		}
+	} else if home != "" {
+		key = ""
+	}
+	if key == "" {
+		var err error
+		home, err = codexHome(home)
+		if err != nil {
+			return nil, err
+		}
+	}
+	d, err := backend.NewDecisions(key, home, c.RunThreshold)
+	if err != nil {
+		return nil, err
+	}
+	return d.Decide, nil
+}
+
+func run(ctx context.Context, path string, once bool, interval time.Duration) error {
+	file, err := os.Open(path)
+	if err != nil {
+		return err
+	}
+	defer file.Close()
+	dec := json.NewDecoder(file)
+	dec.DisallowUnknownFields()
+	var cfg config
+	if err = dec.Decode(&cfg); err != nil {
+		return err
+	}
+	if dec.Decode(new(any)) != io.EOF {
+		return errors.New("trailing configuration data")
+	}
+	if interval <= 0 || cfg.Inbox == "" || cfg.Maildir == "" || cfg.Timezone == "" {
+		return errors.New("positive poll interval, inbox, maildir and timezone required")
+	}
+	zone, err := time.LoadLocation(cfg.Timezone)
+	if err != nil {
+		return err
+	}
+	at, err := time.Parse("15:04", cfg.DailyAt)
+	if err != nil {
+		return err
+	}
+	triage, err := makeTriage(cfg.Triage)
+	if err != nil {
+		return err
+	}
+	worker, err := makeModel(cfg.Worker)
+	if err != nil {
+		return err
+	}
+	m, err := personal.OpenMaildir(cfg.Maildir)
+	if err != nil {
+		return err
+	}
+	tasks, err := personal.NewTasks("https://api.todoist.com/api/v1", os.Getenv("TODOIST_API_TOKEN"))
+	if err != nil {
+		return err
+	}
+	notifications, err := personal.OpenNotifications(cfg.Notifications, os.Stdout)
+	if err != nil {
+		return err
+	}
+	inbox, err := aloop.OpenInbox(cfg.Inbox)
+	if err != nil {
+		return err
+	}
+	defer inbox.Close()
+	agent, err := aloop.New(inbox, cfg.Prompt, zone, triage, worker, personal.Tools(m, tasks, notifications)...)
+	if err != nil {
+		return err
+	}
+	collect := func() error {
+		mail, err := m.Collect(ctx, inbox)
+		batch := append(mail, personal.Daily(time.Now().In(zone), at.Hour(), at.Minute())...)
+		return errors.Join(err, inbox.Append(batch...))
+	}
+	first := collect()
+	if once {
+		return errors.Join(first, agent.RunOnce(ctx))
+	}
+	if first != nil {
+		slog.Error("Signal collection failed", "error", first)
+	}
+	ctx, cancel := context.WithCancel(ctx)
+	defer cancel()
+	stopped := make(chan struct{})
+	go func() {
+		defer close(stopped)
+		ticker := time.NewTicker(interval)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-ctx.Done():
+				return
+			case <-ticker.C:
+				if err := collect(); err != nil {
+					slog.Error("Signal collection failed", "error", err)
+				}
+			}
+		}
+	}()
+	err = agent.Run(ctx, interval)
+	cancel()
+	<-stopped
+	return err
+}
+
+func main() {
+	path := flag.String("config", "aloop.json", "Agent configuration file")
+	once := flag.Bool("once", false, "Collect signals and process one snapshot")
+	interval := flag.Duration("poll", 30*time.Second, "Signal polling and retry interval")
+	flag.Parse()
+	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
+	defer stop()
+	if err := run(ctx, *path, *once, *interval); err != nil && !errors.Is(err, context.Canceled) {
+		slog.Error("Agent stopped", "error", err)
+		os.Exit(1)
+	}
+}
