@@ -1,11 +1,11 @@
 {
-  "prompt": "Keep existing task deadlines current. Ignore advertisements and save routine updates for the daily digest. When the digest is due, finish related updates and notify me once with my current tasks and pending updates.",
+  "prompt": "Notify me promptly about urgent email. Ignore advertisements and save routine actionable updates for the daily digest. When the digest is due, send me one notification summarizing pending updates and deadlines. If there are no updates, say so briefly.",
   "maildir": "/var/lib/aloop/Maildir",
   "inbox": "/var/lib/aloop/inbox.db",
   "notifications": "/var/lib/aloop/notifications",
   "timezone": "Etc/UTC",
   "daily_at": "09:00",
   "web_listen": ":8080",
-  "triage": {"provider": "openai-decisions", "key_env": "OPENAI_API_KEY"},
-  "worker": {"provider": "openai-compatible", "base_url": "https://api.openai.com/v1", "model": "gpt-6-luna"}
+  "triage": {"provider": "openai-decisions", "codex_home": "/var/lib/aloop/codex"},
+  "worker": {"provider": "codex", "codex_home": "/var/lib/aloop/codex"}
 }

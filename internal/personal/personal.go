@@ -98,13 +98,18 @@ func (n *Notifications) Send(ctx context.Context, c aloop.Call) (string, error) 
 }
 
 func Tools(m *Maildir, t *Tasks, n *Notifications) []aloop.Tool {
-	return []aloop.Tool{
+	tools := []aloop.Tool{
 		{Name: "read_email", Description: "Read the referenced email", Run: m.Read},
+		{Name: "notify", Description: "Send the user a text notification", Parameters: []string{"message"}, Effect: true, Run: n.Send},
+	}
+	if t == nil {
+		return tools
+	}
+	return append(tools, []aloop.Tool{
 		{Name: "list_tasks", Description: "List current open tasks with IDs and due dates", Run: t.List},
 		{Name: "create_task", Description: "Create a new task in Todoist", Parameters: []string{"title"}, Effect: true, Run: t.Create},
 		{Name: "update_due", Description: "Change an existing Todoist task's due date (YYYY-MM-DD)", Parameters: []string{"id", "date"}, Effect: true, Run: t.Update},
-		{Name: "notify", Description: "Send the user a text notification", Parameters: []string{"message"}, Effect: true, Run: n.Send},
-	}
+	}...)
 }
 
 func Daily(now time.Time, hour, minute int) []aloop.Entry {
@@ -112,5 +117,5 @@ func Daily(now time.Time, hour, minute int) []aloop.Entry {
 		return nil
 	}
 	day := now.Format(time.DateOnly)
-	return []aloop.Entry{{ID: "daily:" + day, Source: "schedule", Ref: day, Summary: "Daily to-do digest due for " + day}}
+	return []aloop.Entry{{ID: "daily:" + day, Source: "schedule", Ref: day, Summary: "Daily digest due for " + day}}
 }

@@ -23,6 +23,7 @@ type Decisions struct {
 	runThreshold  *float64
 	endpoint      string
 	client        *http.Client
+	refreshLogin  func(context.Context) error
 }
 
 // NewDecisions authenticates with either an API key or a Codex file login.
@@ -50,6 +51,20 @@ func NewDecisions(key, codexHome string, runThreshold *float64) (*Decisions, err
 			return nil, err
 		}
 	}
+	return d, nil
+}
+
+// NewCodexDecisions uses the Codex CLI to renew the file login if Decisions rejects it.
+func NewCodexDecisions(executable, home string, env []string, runThreshold *float64) (*Decisions, error) {
+	cli, err := NewCodex(executable, "", home, env)
+	if err != nil {
+		return nil, err
+	}
+	d, err := NewDecisions("", home, runThreshold)
+	if err != nil {
+		return nil, err
+	}
+	d.refreshLogin = cli.refreshLogin
 	return d, nil
 }
 
@@ -190,11 +205,7 @@ func (d *Decisions) Decide(ctx context.Context, prompt string, now time.Time, in
 	return plan, nil
 }
 
-func (d *Decisions) request(ctx context.Context, input string, questions []decisionQuestion) (map[string]decisionAnswer, error) {
-	body, err := json.Marshal(map[string]any{"model": DecisionsModel, "input": input, "questions": questions})
-	if err != nil {
-		return nil, err
-	}
+func (d *Decisions) send(ctx context.Context, body []byte) (*http.Response, error) {
 	req, err := http.NewRequestWithContext(ctx, http.MethodPost, d.endpoint, bytes.NewReader(body))
 	if err != nil {
 		return nil, err
@@ -205,9 +216,27 @@ func (d *Decisions) request(ctx context.Context, input string, questions []decis
 	}
 	req.Header.Set("Authorization", "Bearer "+token)
 	req.Header.Set("Content-Type", "application/json")
-	res, err := d.client.Do(req)
+	return d.client.Do(req)
+}
+
+func (d *Decisions) request(ctx context.Context, input string, questions []decisionQuestion) (map[string]decisionAnswer, error) {
+	body, err := json.Marshal(map[string]any{"model": DecisionsModel, "input": input, "questions": questions})
 	if err != nil {
 		return nil, err
+	}
+	res, err := d.send(ctx, body)
+	if err != nil {
+		return nil, err
+	}
+	if res.StatusCode == http.StatusUnauthorized && d.refreshLogin != nil {
+		res.Body.Close()
+		if err := d.refreshLogin(ctx); err != nil {
+			return nil, fmt.Errorf("refresh Codex login: %w", err)
+		}
+		res, err = d.send(ctx, body)
+		if err != nil {
+			return nil, err
+		}
 	}
 	defer res.Body.Close()
 	if res.StatusCode != http.StatusOK {

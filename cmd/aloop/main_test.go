@@ -33,6 +33,7 @@ func TestE2EOneShotUsesConfiguredRolesAndReopensInbox(t *testing.T) {
 		var snapshot struct {
 			Inbox []struct{ ID string }
 			Now   time.Time
+			Tools map[string]json.RawMessage
 		}
 		if err := json.Unmarshal([]byte(request.Messages[1].Content), &snapshot); err != nil || len(snapshot.Inbox) != 1 {
 			t.Error("expected one daily entry")
@@ -45,6 +46,9 @@ func TestE2EOneShotUsesConfiguredRolesAndReopensInbox(t *testing.T) {
 			t.Error("missing shared prompt")
 		}
 		call := calls.Add(1)
+		if call == 2 && (len(snapshot.Tools) != 2 || snapshot.Tools["read_email"] == nil || snapshot.Tools["notify"] == nil) {
+			t.Errorf("worker received unexpected tools: %v", snapshot.Tools)
+		}
 		group := "run"
 		if call == 2 {
 			group = "done"
@@ -71,7 +75,7 @@ func TestE2EOneShotUsesConfiguredRolesAndReopensInbox(t *testing.T) {
 	if err = os.WriteFile(file, data, 0600); err != nil {
 		t.Fatal(err)
 	}
-	t.Setenv("TODOIST_API_TOKEN", "unused")
+	t.Setenv("TODOIST_API_TOKEN", "")
 	t.Setenv("OPENAI_API_KEY", "")
 	binary := filepath.Join(dir, "aloop")
 	build := exec.CommandContext(t.Context(), "go", "build", "-o", binary, ".")

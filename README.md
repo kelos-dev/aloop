@@ -6,13 +6,13 @@ For example, a reply that moves a deadline and a daily timer can wake the same a
 
 ## Run the personal agent
 
-The supplied command reads a local Maildir, manages tasks through Todoist, and prints notifications to stdout. Each notification also has a durable text file in the configured directory. The first collection includes existing mail in both `new` and `cur`. Choose a Maildir containing the messages you want the agent to handle.
+The supplied command reads a local Maildir and prints notifications to stdout. Each notification also has a durable text file in the configured directory. Set `TODOIST_API_TOKEN` if you want the agent to list, create, and update Todoist tasks. The first collection includes existing mail in both `new` and `cur`. Choose a Maildir containing the messages you want the agent to handle.
 
-Install Go 1.25 or later and provide a Todoist token in `TODOIST_API_TOKEN`. Save this configuration as `aloop.json`, using your own Maildir path, time zone, and credentials.
+Install Go 1.25 or later and sign in to the Codex CLI with file credential storage. Save this configuration as `aloop.json`, using your own Maildir path, time zone, and Codex home.
 
 ```json
 {
-  "prompt": "Help me manage deadlines. Ignore newsletters. Check my current tasks before creating or updating one. When the daily digest is due, finish related updates first, then notify me of my current list.",
+  "prompt": "Notify me about urgent email. Ignore newsletters. Save routine updates and deadlines for one daily digest.",
   "maildir": "/home/me/Mail/INBOX",
   "inbox": "./inbox.db",
   "notifications": "./notifications",
@@ -48,7 +48,7 @@ Triage defaults to `openai-decisions` when its configuration is omitted. It call
 
 By default, aloop uses the returned choice. An optional numeric `triage.run_threshold` from 0 to 1 selects `run` when its probability reaches the threshold. Below the threshold the higher of `dismiss` and `defer` wins, with ties deferred. A lower threshold can trigger more worker runs. Decisions can defer until another signal. The worker and prompted triage providers can also set an explicit retry time.
 
-For Decisions, set `key_env` to the name of an API key variable or set `codex_home` to use the credentials in its `auth.json`. Without either setting, aloop tries `OPENAI_API_KEY`, then `CODEX_HOME` or `~/.codex`. File credentials are reread for each request. Keep the Codex login current when using its access token.
+For Decisions, set `key_env` to the name of an API key variable or set `codex_home` to use the credentials in its `auth.json`. Without either setting, aloop tries `OPENAI_API_KEY`, then `CODEX_HOME` or `~/.codex`. File credentials are reread for each request. When the Codex CLI is installed, aloop asks it to refresh a rejected file login and retries that Decisions request once.
 
 Choose a worker provider from the table. Explicitly selecting one of these for triage uses a prompted JSON completion.
 
@@ -103,8 +103,8 @@ The first deployment needs the following setup.
 
 1. Make `DEV_CLUSTER_KUBECONFIG`, `CLOUDFLARE_ACCESS_CLIENT_ID`, and `CLOUDFLARE_ACCESS_CLIENT_SECRET` available to GitHub Actions in the `dev` environment. Use the same kubeconfig format and Cloudflare Access endpoint as Kelos.
 2. Choose an existing namespace using the Actions variable `ALOOP_NAMESPACE` (defaults to `default`). The cluster needs to provision a 1 GiB volume and pull `ghcr.io/kelos-dev/aloop`. For a private image, configure pull credentials on the namespace's default service account.
-3. Set `OPENAI_API_KEY` and `TODOIST_API_TOKEN` for the dev accounts as GitHub `dev` environment secrets. Optionally set `ALOOP_WEB_PASSWORD` for private views. The workflow applies these keys to the Kubernetes secret `aloop-credentials`. To manage the secret directly in Kubernetes, create it in the target namespace and leave all three GitHub runtime secrets unset. Redeploy after updating credentials so the pod picks them up.
+3. Set the GitHub `dev` environment secret `CODEX_AUTH_JSON` to a Codex login file. To give the pod its own refreshable login, sign in with `CODEX_HOME="$dev_codex_home" codex login -c 'cli_auth_credentials_store="file"'` using a separate directory, then run `gh secret set CODEX_AUTH_JSON --env dev < "$dev_codex_home/auth.json"`. Optionally set `ALOOP_WEB_PASSWORD` for private views. The workflow applies each supplied key to the Kubernetes secret `aloop-credentials`. You can also manage either key directly in that secret. Redeploy after replacing the login or password.
 
-The agent uses Decisions for triage and an OpenAI worker. It reads mail delivered to `/var/lib/aloop/Maildir` and schedules a Todoist digest at 09:00 UTC. One replica owns the persistent volume containing the Maildir, inbox database, and notifications. Read notifications with `kubectl -n default logs deployment/aloop`, substituting your namespace if needed. [Dev agent configuration](deploy/dev/aloop.json)
+Decisions triage and the Codex worker share a writable Codex home on the persistent volume. The pod keeps CLI credential refreshes across restarts and imports a replacement login when the supplied file changes. It reads mail delivered to `/var/lib/aloop/Maildir` and schedules an email digest at 09:00 UTC. The same volume stores the inbox database and notifications. Read notifications with `kubectl -n default logs deployment/aloop`, substituting your namespace if needed. [Dev agent configuration](deploy/dev/aloop.json)
 
 The dev hostname forwards to NodePort `30086` on Service `aloop`, which sends HTTP to the agent on port `8080`. The deployment workflow checks the public overview after rollout. [Dev dashboard](https://dev-aloop.kelos.dev/)

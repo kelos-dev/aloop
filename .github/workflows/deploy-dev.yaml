@@ -91,8 +91,7 @@ jobs:
         env:
           ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'default' }}
           IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
-          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
-          TODOIST_API_TOKEN: ${{ secrets.TODOIST_API_TOKEN }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           ALOOP_WEB_PASSWORD: ${{ secrets.ALOOP_WEB_PASSWORD }}
           DEV_CLUSTER_KUBECONFIG: ${{ secrets.DEV_CLUSTER_KUBECONFIG }}
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
