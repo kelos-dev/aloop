@@ -1,0 +1,128 @@
+name: Deploy to Dev
+
+on:
+  workflow_run:
+    workflows: [CI]
+    types: [completed]
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  REVISION: ${{ github.event.workflow_run.head_sha || github.sha }}
+
+jobs:
+  publish:
+    if: >-
+      (github.event_name == 'workflow_dispatch' && github.ref == 'refs/heads/main') ||
+      (github.event.workflow_run.conclusion == 'success' && github.event.workflow_run.event == 'push' &&
+       github.event.workflow_run.head_repository.full_name == github.repository)
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+    outputs:
+      digest: ${{ steps.image.outputs.digest }}
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ env.REVISION }}
+          persist-credentials: false
+      - uses: actions/setup-go@d8cbb8045d7f43706b9177cceb36c1f91a6644d5 # v7.1.0
+        with:
+          go-version-file: go.mod
+      - uses: docker/setup-qemu-action@99012661954931238ded8c8b007157a8430204e1 # v4.4.0
+        with:
+          platforms: arm64
+      - uses: docker/setup-buildx-action@f87e5991a6d7451dcb8d9637bfbc97413f497069 # v4.4.1
+      - uses: docker/login-action@8aa5831fb8d48d8f76594c7ddde61ae58019f550 # v4.8.0
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - name: Publish dev image
+        id: image
+        run: |
+          make image PUSH=true IMAGE_PLATFORMS=linux/amd64,linux/arm64 VERSION="sha-$REVISION"
+          digest=$(docker buildx imagetools inspect "ghcr.io/kelos-dev/aloop:sha-$REVISION" --format '{{.Manifest.Digest}}')
+          echo "digest=$digest" >> "$GITHUB_OUTPUT"
+
+  deploy:
+    needs: publish
+    runs-on: ubuntu-24.04
+    environment:
+      name: dev
+      url: https://dev-aloop.kelos.dev
+    concurrency:
+      group: deploy-aloop-dev
+      queue: max
+    steps:
+      - name: Check current main revision
+        id: revision
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          current=$(gh api "repos/$GITHUB_REPOSITORY/git/ref/heads/main" --jq .object.sha)
+          if [[ "$current" == "$REVISION" ]]; then
+            echo "current=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "::notice::Skipping outdated revision $REVISION (main is $current)"
+          fi
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        if: steps.revision.outputs.current == 'true'
+        with:
+          ref: ${{ env.REVISION }}
+          persist-credentials: false
+      - name: Install cloudflared
+        if: steps.revision.outputs.current == 'true'
+        env:
+          VERSION: 2026.10.5
+          SHA256: 149d1ec4ac8e58bdbf08a41cc42347da9184d9fb4ef0df6528d75c90a85ac0ed
+        run: |
+          package="$RUNNER_TEMP/cloudflared.deb"
+          curl -fsSL --retry 3 -o "$package" "https://github.com/cloudflare/cloudflared/releases/download/$VERSION/cloudflared-linux-amd64.deb"
+          echo "$SHA256  $package" | sha256sum --check
+          sudo dpkg --install "$package"
+      - name: Deploy aloop and wait for rollout
+        if: steps.revision.outputs.current == 'true'
+        working-directory: deploy/dev
+        env:
+          ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'default' }}
+          IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
+          OPENAI_API_KEY: ${{ secrets.OPENAI_API_KEY }}
+          TODOIST_API_TOKEN: ${{ secrets.TODOIST_API_TOKEN }}
+          ALOOP_WEB_PASSWORD: ${{ secrets.ALOOP_WEB_PASSWORD }}
+          DEV_CLUSTER_KUBECONFIG: ${{ secrets.DEV_CLUSTER_KUBECONFIG }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+        run: |
+          : "${DEV_CLUSTER_KUBECONFIG:?missing DEV_CLUSTER_KUBECONFIG}"
+          : "${TUNNEL_SERVICE_TOKEN_ID:?missing CLOUDFLARE_ACCESS_CLIENT_ID}"
+          : "${TUNNEL_SERVICE_TOKEN_SECRET:?missing CLOUDFLARE_ACCESS_CLIENT_SECRET}"
+          [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
+          umask 077
+          export KUBECONFIG="$RUNNER_TEMP/aloop-kubeconfig"
+          printf '%s' "$DEV_CLUSTER_KUBECONFIG" > "$KUBECONFIG"
+          cluster=$(kubectl config view --minify -o jsonpath='{.contexts[0].context.cluster}')
+          kubectl config set-cluster "$cluster" --server=https://127.0.0.1:6443
+          cloudflared access tcp --hostname dev-cluster.kelos.dev --url 127.0.0.1:6443 &
+          proxy=$!
+          trap 'kill "$proxy" 2>/dev/null || true; rm -f "$KUBECONFIG"' EXIT
+          for _ in {1..30}; do
+            if nc -z 127.0.0.1 6443; then break; fi
+            kill -0 "$proxy"
+            sleep 1
+          done
+          kubectl --request-timeout=15s get --raw=/readyz
+          bash prepare-credentials.sh "$ALOOP_NAMESPACE"
+          kustomize edit set image "ghcr.io/kelos-dev/aloop=ghcr.io/kelos-dev/aloop@$IMAGE_DIGEST"
+          kubectl -n "$ALOOP_NAMESPACE" apply -k .
+          kubectl -n "$ALOOP_NAMESPACE" rollout status deployment/aloop --timeout=5m
+      - name: Check the dev frontend
+        if: steps.revision.outputs.current == 'true'
+        run: |
+          curl -fsS --retry 6 --retry-all-errors --max-time 10 --retry-max-time 90 \
+            https://dev-aloop.kelos.dev/ -o "$RUNNER_TEMP/overview.html"
+          grep -Fq 'Agent overview' "$RUNNER_TEMP/overview.html"

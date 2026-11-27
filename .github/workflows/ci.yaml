@@ -32,3 +32,28 @@ jobs:
       - run: make ${{ matrix.target }}
         env:
           TEST_FLAGS: -race
+          VERSION: ci
+      - name: Test dev rollout and storage
+        if: matrix.target == 'image'
+        working-directory: deploy/dev
+        run: |
+          image=ghcr.io/kelos-dev/aloop:ci
+          kind create cluster --wait 2m
+          kind load docker-image "$image"
+          kubectl create secret generic aloop-credentials \
+            --from-literal=HTTPS_PROXY=http://127.0.0.1:1
+          OPENAI_API_KEY=test TODOIST_API_TOKEN=test ALOOP_WEB_PASSWORD=test bash prepare-credentials.sh default
+          kustomize edit set image "ghcr.io/kelos-dev/aloop=$image"
+          kubectl apply -k .
+          kubectl rollout status deployment/aloop --timeout=3m
+          node_ip=$(kubectl get node kind-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
+          url="http://$node_ip:30086"
+          curl -fsS --retry 5 --retry-all-errors "$url/" -o "$RUNNER_TEMP/overview.html"
+          grep -Fq 'Agent overview' "$RUNNER_TEMP/overview.html"
+          test "$(curl -sS -o /dev/null -w '%{http_code}' "$url/inbox")" = 401
+          curl -fsS -u aloop:test "$url/inbox" -o "$RUNNER_TEMP/inbox.html"
+          grep -Fq 'Filter signals' "$RUNNER_TEMP/inbox.html"
+          kubectl exec deployment/aloop -- sh -ec 'test -s inbox.db && touch Maildir/tmp/persistence-test'
+          kubectl rollout restart deployment/aloop
+          kubectl rollout status deployment/aloop --timeout=3m
+          kubectl exec deployment/aloop -- test -f Maildir/tmp/persistence-test
