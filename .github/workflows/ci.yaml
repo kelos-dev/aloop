@@ -40,9 +40,10 @@ jobs:
           image=ghcr.io/kelos-dev/aloop:ci
           kind create cluster --wait 2m
           kind load docker-image "$image"
-          kubectl create secret generic aloop-credentials \
-            --from-literal=HTTPS_PROXY=http://127.0.0.1:1
-          OPENAI_API_KEY=test TODOIST_API_TOKEN=test ALOOP_WEB_PASSWORD=test bash prepare-credentials.sh default
+          export CODEX_AUTH_JSON='{"tokens":{"access_token":"fixture"}}'
+          ALOOP_WEB_PASSWORD=test bash prepare-credentials.sh default
+          kustomize edit add patch --kind Deployment --name aloop --patch \
+            '[{"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"HTTPS_PROXY","value":"http://127.0.0.1:1"}}]'
           kustomize edit set image "ghcr.io/kelos-dev/aloop=$image"
           kubectl apply -k .
           kubectl rollout status deployment/aloop --timeout=3m
@@ -54,6 +55,16 @@ jobs:
           curl -fsS -u aloop:test "$url/inbox" -o "$RUNNER_TEMP/inbox.html"
           grep -Fq 'Filter signals' "$RUNNER_TEMP/inbox.html"
           kubectl exec deployment/aloop -- sh -ec 'test -s inbox.db && touch Maildir/tmp/persistence-test'
+          rotated='{"tokens":{"access_token":"refreshed-fixture"}}'
+          test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$CODEX_AUTH_JSON"
+          printf '%s' "$rotated" | kubectl exec -i deployment/aloop -- sh -ec 'cat > "$CODEX_HOME/auth.json"'
           kubectl rollout restart deployment/aloop
           kubectl rollout status deployment/aloop --timeout=3m
           kubectl exec deployment/aloop -- test -f Maildir/tmp/persistence-test
+          test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$rotated"
+          export CODEX_AUTH_JSON='{"tokens":{"access_token":"replacement-fixture"}}'
+          bash prepare-credentials.sh default
+          kubectl apply -k .
+          kubectl rollout status deployment/aloop --timeout=3m
+          test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$CODEX_AUTH_JSON"
+          curl -fsS -u aloop:test "$url/inbox" -o /dev/null

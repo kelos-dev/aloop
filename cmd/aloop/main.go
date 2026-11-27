@@ -44,15 +44,19 @@ type config struct {
 	WebListen     string      `json:"web_listen"`
 }
 
-func makeModel(c modelConfig) (aloop.Model, error) {
-	if c.RunThreshold != nil {
-		return nil, errors.New("run_threshold applies only to Decisions triage")
-	}
+func cliEnvironment() []string {
 	var env []string
 	for _, name := range []string{"HOME", "PATH", "LANG", "TMPDIR", "SystemRoot"} {
 		if value, ok := os.LookupEnv(name); ok {
 			env = append(env, name+"="+value)
 		}
+	}
+	return env
+}
+
+func makeModel(c modelConfig) (aloop.Model, error) {
+	if c.RunThreshold != nil {
+		return nil, errors.New("run_threshold applies only to Decisions triage")
 	}
 	switch c.Provider {
 	case "openai-compatible":
@@ -66,7 +70,7 @@ func makeModel(c modelConfig) (aloop.Model, error) {
 		if err != nil {
 			return nil, err
 		}
-		return backend.NewClaude(bin, c.Model, os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"), env)
+		return backend.NewClaude(bin, c.Model, os.Getenv("CLAUDE_CODE_OAUTH_TOKEN"), cliEnvironment())
 	case "codex":
 		bin, err := exec.LookPath("codex")
 		if err != nil {
@@ -76,7 +80,7 @@ func makeModel(c modelConfig) (aloop.Model, error) {
 		if err != nil {
 			return nil, err
 		}
-		return backend.NewCodex(bin, c.Model, home, env)
+		return backend.NewCodex(bin, c.Model, home, cliEnvironment())
 	default:
 		return nil, fmt.Errorf("unknown model provider %q", c.Provider)
 	}
@@ -120,14 +124,21 @@ func makeTriage(c modelConfig) (aloop.Triage, error) {
 	} else if home != "" {
 		key = ""
 	}
+	var bin string
+	var err error
 	if key == "" {
-		var err error
 		home, err = codexHome(home)
 		if err != nil {
 			return nil, err
 		}
+		bin, _ = exec.LookPath("codex")
 	}
-	d, err := backend.NewDecisions(key, home, c.RunThreshold)
+	var d *backend.Decisions
+	if bin != "" {
+		d, err = backend.NewCodexDecisions(bin, home, cliEnvironment(), c.RunThreshold)
+	} else {
+		d, err = backend.NewDecisions(key, home, c.RunThreshold)
+	}
 	if err != nil {
 		return nil, err
 	}
@@ -172,9 +183,12 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 	if err != nil {
 		return err
 	}
-	tasks, err := personal.NewTasks("https://api.todoist.com/api/v1", os.Getenv("TODOIST_API_TOKEN"))
-	if err != nil {
-		return err
+	var tasks *personal.Tasks
+	if token := os.Getenv("TODOIST_API_TOKEN"); token != "" {
+		tasks, err = personal.NewTasks("https://api.todoist.com/api/v1", token)
+		if err != nil {
+			return err
+		}
 	}
 	notifications, err := personal.OpenNotifications(cfg.Notifications, os.Stdout)
 	if err != nil {

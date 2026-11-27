@@ -101,6 +101,64 @@ func NewCodex(executable, model, home string, env []string) (*CLI, error) {
 	return &CLI{executable, model, append(append([]string{}, env...), "CODEX_HOME="+home), true}, nil
 }
 
+func (c *CLI) refreshLogin(ctx context.Context) error {
+	ctx, cancel := context.WithTimeout(ctx, time.Minute)
+	defer cancel()
+	cmd := exec.CommandContext(ctx, c.executable, "app-server", "--listen", "stdio://", "-c", `cli_auth_credentials_store="file"`)
+	cmd.Env = c.env
+	in, err := cmd.StdinPipe()
+	if err != nil {
+		return err
+	}
+	defer in.Close()
+	out, err := cmd.StdoutPipe()
+	if err != nil {
+		return err
+	}
+	cmd.Cancel = func() error {
+		in.Close()
+		out.Close()
+		return cmd.Process.Kill()
+	}
+	if err := cmd.Start(); err != nil {
+		return err
+	}
+	defer func() {
+		in.Close()
+		cmd.Wait()
+	}()
+
+	decoder := json.NewDecoder(out)
+	exchange := func(id int, request string) error {
+		if _, err := fmt.Fprintln(in, request); err != nil {
+			return err
+		}
+		for {
+			var reply struct {
+				ID     int
+				Error  json.RawMessage
+				Result json.RawMessage
+			}
+			if err := decoder.Decode(&reply); err != nil {
+				return err
+			}
+			if reply.ID == id {
+				if len(reply.Error) > 0 || len(reply.Result) == 0 {
+					return errors.New("Codex app-server rejected the account request")
+				}
+				return nil
+			}
+		}
+	}
+	if err := exchange(1, `{"id":1,"method":"initialize","params":{"clientInfo":{"name":"aloop","version":"1"}}}`); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(in, `{"method":"initialized"}`); err != nil {
+		return err
+	}
+	return exchange(2, `{"id":2,"method":"getAuthStatus","params":{"refreshToken":true,"includeToken":false}}`)
+}
+
 // Model metadata can enable Code Mode and collaboration tools independently of CLI feature flags.
 func (c *CLI) writeCodexCatalog(ctx context.Context, dir string) (string, error) {
 	cmd := exec.CommandContext(ctx, c.executable, "debug", "models",

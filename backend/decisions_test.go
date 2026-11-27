@@ -15,6 +15,54 @@ import (
 	"github.com/kelos-dev/aloop"
 )
 
+func TestDecisionsRefreshesRejectedCodexLoginOnce(t *testing.T) {
+	home := t.TempDir()
+	exe := filepath.Join(home, "codex")
+	auth := filepath.Join(home, "auth.json")
+	if err := os.WriteFile(auth, []byte(`{"tokens":{"access_token":"expired"}}`), 0600); err != nil {
+		t.Fatal(err)
+	}
+	script := `#!/bin/sh
+set -eu
+test "$1" = app-server
+read -r init
+case "$init" in *'"method":"initialize"'*) ;; *) exit 1;; esac
+echo '{"id":1,"result":{}}'
+read -r initialized
+read -r account
+case "$account" in *'"method":"getAuthStatus"'*'"refreshToken":true,"includeToken":false'*) ;; *) exit 1;; esac
+echo '{"tokens":{"access_token":"renewed"}}' > "$CODEX_HOME/auth.json"
+echo '{"method":"account/updated"}'
+echo '{"id":2,"result":{"account":{}}}'
+`
+	if err := os.WriteFile(exe, []byte(script), 0700); err != nil {
+		t.Fatal(err)
+	}
+	d, err := NewCodexDecisions(exe, home, nil, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	var calls int
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		calls++
+		if r.Header.Get("Authorization") != "Bearer renewed" || calls > 2 {
+			w.WriteHeader(http.StatusUnauthorized)
+			return
+		}
+		fmt.Fprint(w, `{"answers":[{"type":"choice","name":"entry_0","choice":"run"}]}`)
+	}))
+	defer server.Close()
+	d.endpoint = server.URL
+	batch := []aloop.Entry{{ID: "email:1"}}
+	plan, err := d.Decide(t.Context(), "digest", time.Now(), batch)
+	if err != nil || calls != 2 || !slices.Equal(plan.Run, []string{"email:1"}) {
+		t.Fatalf("plan=%v calls=%d err=%v", plan, calls, err)
+	}
+	if _, err := d.Decide(t.Context(), "digest", time.Now(), batch); err == nil || calls != 4 {
+		t.Fatalf("persistent authorization failure: calls=%d err=%v", calls, err)
+	}
+}
+
 func TestDecisionsSharesSnapshotAcrossQuestionBatches(t *testing.T) {
 	const count = 401
 	entries := make([]aloop.Entry, count)

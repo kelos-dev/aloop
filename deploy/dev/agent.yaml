@@ -43,17 +43,36 @@ spec:
           command: [/bin/sh, -ec]
           args:
             - |
-              mkdir -p Maildir/new Maildir/cur Maildir/tmp
+              umask 077
+              mkdir -p Maildir/new Maildir/cur Maildir/tmp "$CODEX_HOME"
+              seed=/var/run/aloop-login/auth.json
+              digest=$(sha256sum "$seed" | cut -d ' ' -f 1)
+              # Preserve CLI token refreshes until the supplied login changes.
+              if [ ! -s "$CODEX_HOME/auth.json" ] || [ "$digest" != "$(cat "$CODEX_HOME/.seed-digest" 2>/dev/null)" ]; then
+                cp "$seed" "$CODEX_HOME/auth.json.tmp"
+                chmod 600 "$CODEX_HOME/auth.json.tmp"
+                mv "$CODEX_HOME/auth.json.tmp" "$CODEX_HOME/auth.json"
+                printf '%s\n' "$digest" > "$CODEX_HOME/.seed-digest"
+              fi
               exec /usr/local/bin/aloop -config /etc/aloop/aloop.json
-          envFrom:
-            - secretRef:
-                name: aloop-credentials
+          env:
+            - name: CODEX_HOME
+              value: /var/lib/aloop/codex
+            - name: ALOOP_WEB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aloop-credentials
+                  key: ALOOP_WEB_PASSWORD
+                  optional: true
           volumeMounts:
             - name: config
               mountPath: /etc/aloop
               readOnly: true
             - name: data
               mountPath: /var/lib/aloop
+            - name: login
+              mountPath: /var/run/aloop-login
+              readOnly: true
       volumes:
         - name: config
           configMap:
@@ -61,6 +80,13 @@ spec:
         - name: data
           persistentVolumeClaim:
             claimName: aloop-data
+        - name: login
+          secret:
+            secretName: aloop-credentials
+            defaultMode: 0440
+            items:
+              - key: CODEX_AUTH_JSON
+                path: auth.json
 ---
 apiVersion: v1
 kind: Service
