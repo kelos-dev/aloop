@@ -257,3 +257,26 @@ func TestCreateTaskReusesCommandID(t *testing.T) {
 		t.Fatalf("operation IDs %v", ids)
 	}
 }
+
+func TestRecentNotifications(t *testing.T) {
+	dir := t.TempDir()
+	notes, err := OpenNotifications(dir, new(bytes.Buffer))
+	if err != nil {
+		t.Fatal(err)
+	}
+	for n, message := range []string{"first", "second", "third"} {
+		key := fmt.Sprintf("%064x", n)
+		name, err := notes.Send(t.Context(), aloop.Call{Key: key, Args: map[string]string{"message": message}})
+		if err != nil {
+			t.Fatal(err)
+		}
+		sent := time.Unix(int64(n+1), 0)
+		if err := os.Chtimes(filepath.Join(dir, name), sent, sent); err != nil {
+			t.Fatal(err)
+		}
+	}
+	got, err := notes.Recent(2)
+	if err != nil || len(got) != 2 || got[0].Message != "third" || got[1].Message != "second" || !got[0].Sent.Equal(time.Unix(3, 0)) {
+		t.Fatalf("recent = %+v, err = %v", got, err)
+	}
+}

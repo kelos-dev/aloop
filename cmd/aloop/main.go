@@ -8,6 +8,8 @@ import (
 	"fmt"
 	"io"
 	"log/slog"
+	"net"
+	"net/http"
 	"os"
 	"os/exec"
 	"os/signal"
@@ -17,6 +19,7 @@ import (
 
 	"github.com/kelos-dev/aloop"
 	"github.com/kelos-dev/aloop/backend"
+	"github.com/kelos-dev/aloop/internal/dashboard"
 	"github.com/kelos-dev/aloop/internal/personal"
 )
 
@@ -38,6 +41,7 @@ type config struct {
 	Notifications string      `json:"notifications"`
 	Timezone      string      `json:"timezone"`
 	DailyAt       string      `json:"daily_at"`
+	WebListen     string      `json:"web_listen"`
 }
 
 func makeModel(c modelConfig) (aloop.Model, error) {
@@ -197,8 +201,31 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 	if first != nil {
 		slog.Error("Signal collection failed", "error", first)
 	}
-	ctx, cancel := context.WithCancel(ctx)
-	defer cancel()
+	ctx, cancel := context.WithCancelCause(ctx)
+	defer cancel(nil)
+	if cfg.WebListen != "" {
+		listener, err := net.Listen("tcp", cfg.WebListen)
+		if err != nil {
+			return err
+		}
+		server := &http.Server{
+			Handler:           dashboard.Handler(inbox, notifications, zone, cfg.DailyAt, os.Getenv("ALOOP_WEB_PASSWORD")),
+			ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: time.Minute,
+		}
+		defer func() {
+			stop, release := context.WithTimeout(context.Background(), 5*time.Second)
+			defer release()
+			if err := server.Shutdown(stop); err != nil {
+				server.Close()
+			}
+		}()
+		go func() {
+			if err := server.Serve(listener); !errors.Is(err, http.ErrServerClosed) {
+				cancel(err)
+			}
+		}()
+		slog.Info("Dashboard listening", "address", listener.Addr())
+	}
 	stopped := make(chan struct{})
 	go func() {
 		defer close(stopped)
@@ -216,9 +243,9 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 		}
 	}()
 	err = agent.Run(ctx, interval)
-	cancel()
+	cancel(err)
 	<-stopped
-	return err
+	return context.Cause(ctx)
 }
 
 func main() {

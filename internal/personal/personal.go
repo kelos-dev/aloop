@@ -7,6 +7,9 @@ import (
 	"io"
 	"os"
 	"path/filepath"
+	"regexp"
+	"sort"
+	"strings"
 	"time"
 
 	"github.com/kelos-dev/aloop"
@@ -15,6 +18,42 @@ import (
 type Notifications struct {
 	dir    string
 	output io.Writer
+}
+
+type Notification struct {
+	Sent    time.Time
+	Message string
+}
+
+var notificationName = regexp.MustCompile(`^[0-9a-f]{64}\.txt$`)
+
+// Recent reads the newest published notifications from the durable outbox.
+func (n *Notifications) Recent(limit int) ([]Notification, error) {
+	entries, err := os.ReadDir(n.dir)
+	if err != nil {
+		return nil, err
+	}
+	var files []os.FileInfo
+	for _, entry := range entries {
+		if !entry.Type().IsRegular() || !notificationName.MatchString(entry.Name()) {
+			continue
+		}
+		info, err := entry.Info()
+		if err != nil {
+			return nil, err
+		}
+		files = append(files, info)
+	}
+	sort.SliceStable(files, func(i, j int) bool { return files[i].ModTime().After(files[j].ModTime()) })
+	var messages []Notification
+	for _, file := range files[:min(len(files), max(limit, 0))] {
+		data, err := os.ReadFile(filepath.Join(n.dir, file.Name()))
+		if err != nil {
+			return nil, err
+		}
+		messages = append(messages, Notification{Sent: file.ModTime(), Message: strings.TrimSuffix(string(data), "\n")})
+	}
+	return messages, nil
 }
 
 func OpenNotifications(dir string, output io.Writer) (*Notifications, error) {

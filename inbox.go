@@ -18,7 +18,8 @@ type Entry struct {
 	Summary string `json:"summary"`
 }
 
-type pending struct {
+// PendingSignal is an inbox entry with its persisted deferral state.
+type PendingSignal struct {
 	Entry
 	Deferred bool
 	Until    time.Time
@@ -78,7 +79,7 @@ func (i *Inbox) Append(batch ...Entry) error {
 			if tx.Bucket(seen).Get(key) != nil {
 				continue
 			}
-			data, err := json.Marshal(pending{Entry: e})
+			data, err := json.Marshal(PendingSignal{Entry: e})
 			if err != nil {
 				return err
 			}
@@ -106,7 +107,7 @@ func (i *Inbox) snapshot(now time.Time) ([]Entry, error) {
 	ready := false
 	err := i.db.View(func(tx *bolt.Tx) error {
 		return tx.Bucket(entries).ForEach(func(_, v []byte) error {
-			var p pending
+			var p PendingSignal
 			if err := json.Unmarshal(v, &p); err != nil {
 				return err
 			}
@@ -135,7 +136,7 @@ func (i *Inbox) settle(snapshotTime time.Time, done []string, deferred []Deferra
 			}
 		}
 		for _, d := range deferred {
-			var p pending
+			var p PendingSignal
 			if err := json.Unmarshal(b.Get([]byte(d.ID)), &p); err != nil {
 				return err
 			}
@@ -189,4 +190,39 @@ func (i *Inbox) record(key string, r Receipt) error {
 		return err
 	}
 	return i.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(receipts).Put([]byte(key), data) })
+}
+
+// InboxStatus describes the durable signals and completed effects in one read transaction.
+type InboxStatus struct {
+	Received int
+	Pending  []PendingSignal
+	Effects  map[string]int
+}
+
+// Status includes deferred signals even when none are eligible to wake the agent.
+func (i *Inbox) Status() (InboxStatus, error) {
+	status := InboxStatus{Effects: make(map[string]int)}
+	err := i.db.View(func(tx *bolt.Tx) error {
+		status.Received = tx.Bucket(seen).Stats().KeyN
+		err := tx.Bucket(entries).ForEach(func(_, data []byte) error {
+			var signal PendingSignal
+			if err := json.Unmarshal(data, &signal); err != nil {
+				return err
+			}
+			status.Pending = append(status.Pending, signal)
+			return nil
+		})
+		if err != nil {
+			return err
+		}
+		return tx.Bucket(receipts).ForEach(func(_, data []byte) error {
+			var receipt Receipt
+			if err := json.Unmarshal(data, &receipt); err != nil {
+				return err
+			}
+			status.Effects[receipt.Tool]++
+			return nil
+		})
+	})
+	return status, err
 }

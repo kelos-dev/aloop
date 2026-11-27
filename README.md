@@ -36,6 +36,12 @@ go run ./cmd/aloop -config aloop.json
 
 The first command collects available signals and runs one snapshot, including any selected tool actions. The second keeps running. The poll interval defaults to 30 seconds. On the first poll at or after the configured local time, the scheduler emits that day's digest signal. Its stable date key prevents duplicates across restarts. Both models receive the current time in the configured time zone.
 
+### Web dashboard
+
+Set `"web_listen": "127.0.0.1:8080"` in the configuration and start aloop in continuous mode. Open `http://127.0.0.1:8080` to see pending and handled signal counts, the processing flow, and completed tool actions. Refresh the page to read the current state. Leaving out `web_listen` keeps the HTTP listener disabled.
+
+The overview is public. To enable the personal views, supply `ALOOP_WEB_PASSWORD` and sign in with username `aloop` over localhost or HTTPS. **Signal inbox** shows summaries and deferred signals. **Notifications** shows the 30 most recent messages saved by the agent.
+
 ### Configure triage and the worker
 
 Triage defaults to `openai-decisions` when its configuration is omitted. It calls OpenAI’s `/v1/decisions` endpoint with `gpt-6-luna`. Each named choice question classifies one pending entry as `run`, `dismiss`, or `defer` using the standing prompt, time, and full snapshot as shared input. Snapshots larger than 400 entries use several requests with the same shared input. A refusal or incomplete set of answers leaves the snapshot pending for retry.
@@ -88,3 +94,17 @@ Use a stable, source-qualified ID per occurrence. A later reply gets its own ID.
 To exercise live Decisions triage and a signed-in Codex worker, run `ALOOP_LIVE_CODEX=1 make test-e2e`. This opt-in test sends synthetic inbox summaries to Decisions and runs the registered tools through a Codex worker using your account. It checks triage decisions, a task update against a local Todoist fixture, and notifications written to disk.
 
 The image includes Claude Code and Codex and runs as the non-root `node` user. Mount the configuration, Maildir, and writable state and notification directories at the paths in your configuration. Supply credentials at runtime. Use `REGISTRY` and `VERSION` to change the image tag. To publish a multi-platform image, set `IMAGE_PLATFORMS=linux/amd64,linux/arm64 PUSH=true` on the image target.
+
+## Dev deployment
+
+After CI passes on a push to `main`, **Deploy to Dev** publishes an amd64/arm64 image to GHCR and rolls out that digest on the Kelos dev cluster through Cloudflare Access. To redeploy the current revision, run `gh workflow run deploy-dev.yaml --ref main`.
+
+The first deployment needs the following setup.
+
+1. Make `DEV_CLUSTER_KUBECONFIG`, `CLOUDFLARE_ACCESS_CLIENT_ID`, and `CLOUDFLARE_ACCESS_CLIENT_SECRET` available to GitHub Actions in the `dev` environment. Use the same kubeconfig format and Cloudflare Access endpoint as Kelos.
+2. Choose an existing namespace using the Actions variable `ALOOP_NAMESPACE` (defaults to `default`). The cluster needs to provision a 1 GiB volume and pull `ghcr.io/kelos-dev/aloop`. For a private image, configure pull credentials on the namespace's default service account.
+3. Set `OPENAI_API_KEY` and `TODOIST_API_TOKEN` for the dev accounts as GitHub `dev` environment secrets. Optionally set `ALOOP_WEB_PASSWORD` for private views. The workflow applies these keys to the Kubernetes secret `aloop-credentials`. To manage the secret directly in Kubernetes, create it in the target namespace and leave all three GitHub runtime secrets unset. Redeploy after updating credentials so the pod picks them up.
+
+The agent uses Decisions for triage and an OpenAI worker. It reads mail delivered to `/var/lib/aloop/Maildir` and schedules a Todoist digest at 09:00 UTC. One replica owns the persistent volume containing the Maildir, inbox database, and notifications. Read notifications with `kubectl -n default logs deployment/aloop`, substituting your namespace if needed. [Dev agent configuration](deploy/dev/aloop.json)
+
+The dev hostname forwards to NodePort `30086` on Service `aloop`, which sends HTTP to the agent on port `8080`. The deployment workflow checks the public overview after rollout. [Dev dashboard](https://dev-aloop.kelos.dev/)

@@ -287,3 +287,25 @@ func TestScheduledDeferralSurvivesOtherSignals(t *testing.T) {
 		t.Fatalf("consumed deadline woke again: %v %v", again, err)
 	}
 }
+
+func TestInboxStatusIncludesDeferredSignalsAndEffectCounts(t *testing.T) {
+	inbox, err := OpenInbox(filepath.Join(t.TempDir(), "inbox.db"))
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inbox.Close()
+	err = inbox.Append(Entry{"mail:1", "email", "1", "Deadline moved"}, Entry{"day:1", "schedule", "1", "Digest due"})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.settle(time.Now(), []string{"day:1"}, []Deferral{{ID: "mail:1"}}); err != nil {
+		t.Fatal(err)
+	}
+	if err := inbox.record("digest-notification", Receipt{Entry: "day:1", Tool: "notify"}); err != nil {
+		t.Fatal(err)
+	}
+	status, err := inbox.Status()
+	if err != nil || status.Received != 2 || len(status.Pending) != 1 || !status.Pending[0].Deferred || status.Pending[0].ID != "mail:1" || status.Effects["notify"] != 1 {
+		t.Fatalf("status = %+v, err = %v", status, err)
+	}
+}
