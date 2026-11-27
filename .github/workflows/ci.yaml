@@ -40,10 +40,12 @@ jobs:
           image=ghcr.io/kelos-dev/aloop:ci
           kind create cluster --wait 2m
           kind load docker-image "$image"
-          export CODEX_AUTH_JSON='{"tokens":{"access_token":"fixture"}}'
+          CODEX_AUTH_JSON=$(node ../../.github/tests/codex-oauth.cjs seed)
+          export CODEX_AUTH_JSON
           ALOOP_WEB_PASSWORD=test bash prepare-credentials.sh default
           kustomize edit add patch --kind Deployment --name aloop --patch \
-            '[{"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"HTTPS_PROXY","value":"http://127.0.0.1:1"}}]'
+            '[{"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"HTTPS_PROXY","value":"http://127.0.0.1:1"}},
+              {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"PATH","value":"/tmp/oauth-test:/usr/local/bin:/usr/bin:/bin"}}]'
           kustomize edit set image "ghcr.io/kelos-dev/aloop=$image"
           kubectl apply -k .
           kubectl rollout status deployment/aloop --timeout=3m
@@ -55,16 +57,6 @@ jobs:
           curl -fsS -u aloop:test "$url/inbox" -o "$RUNNER_TEMP/inbox.html"
           grep -Fq 'Filter signals' "$RUNNER_TEMP/inbox.html"
           kubectl exec deployment/aloop -- sh -ec 'test -s inbox.db && touch Maildir/tmp/persistence-test'
-          rotated='{"tokens":{"access_token":"refreshed-fixture"}}'
-          test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$CODEX_AUTH_JSON"
-          printf '%s' "$rotated" | kubectl exec -i deployment/aloop -- sh -ec 'cat > "$CODEX_HOME/auth.json"'
-          kubectl rollout restart deployment/aloop
-          kubectl rollout status deployment/aloop --timeout=3m
-          kubectl exec deployment/aloop -- test -f Maildir/tmp/persistence-test
-          test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$rotated"
-          export CODEX_AUTH_JSON='{"tokens":{"access_token":"replacement-fixture"}}'
-          bash prepare-credentials.sh default
-          kubectl apply -k .
-          kubectl rollout status deployment/aloop --timeout=3m
-          test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$CODEX_AUTH_JSON"
+          kubectl exec deployment/aloop -- /etc/aloop/codex --version
+          bash ../../.github/tests/dev-refresh.sh
           curl -fsS -u aloop:test "$url/inbox" -o /dev/null

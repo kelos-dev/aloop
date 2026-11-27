@@ -75,16 +75,6 @@ jobs:
         with:
           ref: ${{ env.REVISION }}
           persist-credentials: false
-      - name: Install cloudflared
-        if: steps.revision.outputs.current == 'true'
-        env:
-          VERSION: 2026.10.5
-          SHA256: 149d1ec4ac8e58bdbf08a41cc42347da9184d9fb4ef0df6528d75c90a85ac0ed
-        run: |
-          package="$RUNNER_TEMP/cloudflared.deb"
-          curl -fsSL --retry 3 -o "$package" "https://github.com/cloudflare/cloudflared/releases/download/$VERSION/cloudflared-linux-amd64.deb"
-          echo "$SHA256  $package" | sha256sum --check
-          sudo dpkg --install "$package"
       - name: Deploy aloop and wait for rollout
         if: steps.revision.outputs.current == 'true'
         working-directory: deploy/dev
@@ -97,28 +87,13 @@ jobs:
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
         run: |
-          : "${DEV_CLUSTER_KUBECONFIG:?missing DEV_CLUSTER_KUBECONFIG}"
-          : "${TUNNEL_SERVICE_TOKEN_ID:?missing CLOUDFLARE_ACCESS_CLIENT_ID}"
-          : "${TUNNEL_SERVICE_TOKEN_SECRET:?missing CLOUDFLARE_ACCESS_CLIENT_SECRET}"
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          umask 077
-          export KUBECONFIG="$RUNNER_TEMP/aloop-kubeconfig"
-          printf '%s' "$DEV_CLUSTER_KUBECONFIG" > "$KUBECONFIG"
-          cluster=$(kubectl config view --minify -o jsonpath='{.contexts[0].context.cluster}')
-          kubectl config set-cluster "$cluster" --server=https://127.0.0.1:6443
-          cloudflared access tcp --hostname dev-cluster.kelos.dev --url 127.0.0.1:6443 &
-          proxy=$!
-          trap 'kill "$proxy" 2>/dev/null || true; rm -f "$KUBECONFIG"' EXIT
-          for _ in {1..30}; do
-            if nc -z 127.0.0.1 6443; then break; fi
-            kill -0 "$proxy"
-            sleep 1
-          done
-          kubectl --request-timeout=15s get --raw=/readyz
-          bash prepare-credentials.sh "$ALOOP_NAMESPACE"
-          kustomize edit set image "ghcr.io/kelos-dev/aloop=ghcr.io/kelos-dev/aloop@$IMAGE_DIGEST"
-          kubectl -n "$ALOOP_NAMESPACE" apply -k .
-          kubectl -n "$ALOOP_NAMESPACE" rollout status deployment/aloop --timeout=5m
+          bash with-cluster.sh bash -euo pipefail -c '
+            bash prepare-credentials.sh "$ALOOP_NAMESPACE"
+            kustomize edit set image "ghcr.io/kelos-dev/aloop=ghcr.io/kelos-dev/aloop@$IMAGE_DIGEST"
+            kubectl -n "$ALOOP_NAMESPACE" apply -k .
+            kubectl -n "$ALOOP_NAMESPACE" rollout status deployment/aloop --timeout=5m
+          '
       - name: Check the dev frontend
         if: steps.revision.outputs.current == 'true'
         run: |

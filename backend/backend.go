@@ -101,6 +101,48 @@ func NewCodex(executable, model, home string, env []string) (*CLI, error) {
 	return &CLI{executable, model, append(append([]string{}, env...), "CODEX_HOME="+home), true}, nil
 }
 
+// RefreshCodexLogin renews a file-backed login and verifies that Codex saved it.
+func RefreshCodexLogin(ctx context.Context, executable, home string, env []string) error {
+	cli, err := NewCodex(executable, "", home, env)
+	if err != nil {
+		return err
+	}
+	// getAuthStatus can succeed even when the OAuth exchange fails.
+	before, err := codexRefreshTime(home)
+	if err != nil {
+		return err
+	}
+	if err := cli.refreshLogin(ctx); err != nil {
+		return err
+	}
+	after, err := codexRefreshTime(home)
+	if err != nil {
+		return err
+	}
+	if after.IsZero() || after.Equal(before) {
+		return errors.New("Codex did not persist a renewed login")
+	}
+	return nil
+}
+
+func codexRefreshTime(home string) (time.Time, error) {
+	data, err := os.ReadFile(filepath.Join(home, "auth.json"))
+	if err != nil {
+		return time.Time{}, err
+	}
+	var login struct {
+		LastRefresh time.Time `json:"last_refresh"`
+		Tokens      struct {
+			Access  string `json:"access_token"`
+			Refresh string `json:"refresh_token"`
+		}
+	}
+	if json.Unmarshal(data, &login) != nil || login.Tokens.Refresh == "" || login.Tokens.Access == "" {
+		return time.Time{}, errors.New("expected a refreshable Codex login")
+	}
+	return login.LastRefresh, nil
+}
+
 func (c *CLI) refreshLogin(ctx context.Context) error {
 	ctx, cancel := context.WithTimeout(ctx, time.Minute)
 	defer cancel()

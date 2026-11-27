@@ -1,0 +1,3 @@
+#!/bin/sh
+# The worker and scheduled refresh share a rotating OAuth refresh token.
+exec flock --no-fork "$CODEX_HOME/.cli.lock" /usr/local/bin/codex "$@"
