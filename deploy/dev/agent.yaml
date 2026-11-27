@@ -47,13 +47,19 @@ spec:
               mkdir -p Maildir/new Maildir/cur Maildir/tmp "$CODEX_HOME"
               seed=/var/run/aloop-login/auth.json
               digest=$(sha256sum "$seed" | cut -d ' ' -f 1)
-              # Preserve CLI token refreshes until the supplied login changes.
+              recovery=/var/run/aloop-recovery
+              # GitHub can supply a snapshot of the login the CLI has since renewed on disk.
+              if [ -s "$recovery/auth.json" ] && grep -Fxq "$digest" "$recovery/login-digests"; then
+                digest=$(cat "$recovery/seed-digest")
+                seed="$recovery/auth.json"
+              fi
               if [ ! -s "$CODEX_HOME/auth.json" ] || [ "$digest" != "$(cat "$CODEX_HOME/.seed-digest" 2>/dev/null)" ]; then
                 cp "$seed" "$CODEX_HOME/auth.json.tmp"
                 chmod 600 "$CODEX_HOME/auth.json.tmp"
                 mv "$CODEX_HOME/auth.json.tmp" "$CODEX_HOME/auth.json"
                 printf '%s\n' "$digest" > "$CODEX_HOME/.seed-digest"
               fi
+              export PATH="/etc/aloop:$PATH"
               exec /usr/local/bin/aloop -config /etc/aloop/aloop.json
           env:
             - name: CODEX_HOME
@@ -73,10 +79,19 @@ spec:
             - name: login
               mountPath: /var/run/aloop-login
               readOnly: true
+            - name: recovery
+              mountPath: /var/run/aloop-recovery
+              readOnly: true
       volumes:
         - name: config
           configMap:
             name: aloop-config
+            items:
+              - key: aloop.json
+                path: aloop.json
+              - key: codex
+                path: codex
+                mode: 0555
         - name: data
           persistentVolumeClaim:
             claimName: aloop-data
@@ -87,6 +102,11 @@ spec:
             items:
               - key: CODEX_AUTH_JSON
                 path: auth.json
+        - name: recovery
+          secret:
+            secretName: aloop-codex-recovery
+            optional: true
+            defaultMode: 0440
 ---
 apiVersion: v1
 kind: Service

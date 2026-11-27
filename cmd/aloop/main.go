@@ -262,13 +262,33 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 	return context.Cause(ctx)
 }
 
+func refreshCodexLogin(ctx context.Context) error {
+	home, err := codexHome("")
+	if err != nil {
+		return err
+	}
+	bin, err := exec.LookPath("codex")
+	if err != nil {
+		return err
+	}
+	return backend.RefreshCodexLogin(ctx, bin, home, cliEnvironment())
+}
+
 func main() {
 	path := flag.String("config", "aloop.json", "Agent configuration file")
 	once := flag.Bool("once", false, "Collect signals and process one snapshot")
 	interval := flag.Duration("poll", 30*time.Second, "Signal polling and retry interval")
+	refresh := flag.Bool("refresh-codex-login", false, "Refresh the file login in the Codex home and exit")
 	flag.Parse()
 	ctx, stop := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer stop()
+	if *refresh {
+		if err := refreshCodexLogin(ctx); err != nil {
+			slog.Error("Codex login refresh failed", "error", err)
+			os.Exit(1)
+		}
+		return
+	}
 	if err := run(ctx, *path, *once, *interval); err != nil && !errors.Is(err, context.Canceled) {
 		slog.Error("Agent stopped", "error", err)
 		os.Exit(1)

@@ -1,0 +1,47 @@
+name: Refresh Codex Auth
+
+on:
+  schedule:
+    - cron: "0 6 * * *"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  refresh:
+    if: github.ref == 'refs/heads/main'
+    runs-on: ubuntu-24.04
+    timeout-minutes: 10
+    environment: dev
+    concurrency:
+      group: deploy-aloop-dev
+      queue: max
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Mint the secret-manager installation token
+        id: secret-manager
+        uses: actions/create-github-app-token@d72941d797fd3113feb6b93fd0dec494b13a2547
+        with:
+          app-id: ${{ secrets.KELOS_SECRET_MANAGER_APP_ID }}
+          private-key: ${{ secrets.KELOS_SECRET_MANAGER_PRIVATE_KEY }}
+          permission-environments: write
+      - name: Verify dev secret write access before rotation
+        env:
+          GH_TOKEN: ${{ steps.secret-manager.outputs.token }}
+        run: |
+          probe="ALOOP_CODEX_REFRESH_PROBE_${GITHUB_RUN_ID}_${GITHUB_RUN_ATTEMPT}"
+          gh secret set "$probe" --repo "$GITHUB_REPOSITORY" --env dev --body probe
+          gh secret delete "$probe" --repo "$GITHUB_REPOSITORY" --env dev
+      - name: Refresh the dev login and publish it to Kubernetes and GitHub
+        working-directory: deploy/dev
+        env:
+          GH_TOKEN: ${{ steps.secret-manager.outputs.token }}
+          CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
+          ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'default' }}
+          DEV_CLUSTER_KUBECONFIG: ${{ secrets.DEV_CLUSTER_KUBECONFIG }}
+          TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
+          TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
+        run: bash with-cluster.sh bash refresh-codex-auth.sh "$ALOOP_NAMESPACE"
