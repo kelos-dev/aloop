@@ -6,6 +6,7 @@
   <title>{{.Title}} · aloop</title>
   <link rel="icon" href="/assets/mark.png">
   <link rel="stylesheet" href="/assets/dashboard.css">
+  {{if and (eq .Path "/chat") (not .Locked)}}<script defer src="/assets/chat.js"></script>{{end}}
 </head>
 <body>
 <a class="skip" href="#main">Skip to content</a>
@@ -14,6 +15,7 @@
   <nav aria-label="Workspace">
     <a href="/" {{if eq .Path "/"}}aria-current="page"{{end}}><i aria-hidden="true" class="icon grid"></i>Overview</a>
     <a href="/inbox" {{if eq .Path "/inbox"}}aria-current="page"{{end}}><i aria-hidden="true" class="icon inbox"></i>Signal inbox</a>
+    <a href="/chat" {{if eq .Path "/chat"}}aria-current="page"{{end}}><i aria-hidden="true" class="icon chat"></i>Chat</a>
     <a href="/notifications" {{if eq .Path "/notifications"}}aria-current="page"{{end}}><i aria-hidden="true" class="icon bell"></i>Notifications</a>
   </nav>
   <div class="schedule"><i aria-hidden="true" class="icon clock"></i><div><strong>Daily digest</strong><span>{{.Daily}} · {{.Zone}}</span></div></div>
@@ -23,7 +25,7 @@
   <main id="main">
     <header class="heading">
       <div><p class="date">{{.Date}}</p><h1>{{if eq .Path "/"}}Agent overview{{else}}{{.Title}}{{end}}</h1></div>
-      <div class="refresh"><span>Updated {{.Time}}</span><a href="{{.Path}}{{if .Filter}}?state={{.Filter}}{{end}}" aria-label="Refresh {{.Title}}"><i aria-hidden="true" class="icon refresh"></i>Refresh</a></div>
+      <div class="refresh"><span>Updated {{.Time}}</span><a href="{{.Path}}{{if .Reply}}?reply={{.Reply.ID}}{{else if .Filter}}?state={{.Filter}}{{end}}" aria-label="Refresh {{.Title}}"><i aria-hidden="true" class="icon refresh"></i>Refresh</a></div>
     </header>
     {{if .Locked}}
       <section class="panel empty"><span class="empty-symbol"><i aria-hidden="true" class="icon lock"></i></span><h2>Private view</h2><p>{{if .PrivateEnabled}}Sign in as aloop with the dashboard password to view personal activity.{{else}}Set ALOOP_WEB_PASSWORD on the agent to enable personal views.{{end}}</p><a href="/">Back to overview <i aria-hidden="true" class="icon right"></i></a></section>
@@ -70,8 +72,27 @@
       {{if .Signals}}<section class="panel feed" aria-label="Signals">{{range .Signals}}
         <article><div class="item-head"><span class="item-source"><i aria-hidden="true" class="icon {{if eq .Source "email"}}mail{{else}}signal{{end}}"></i>{{.Source}}</span><span class="tag">{{if .Deferred}}Deferred{{else}}Pending{{end}}</span></div><p>{{.Summary}}</p>{{if and .Deferred (not .Until.IsZero)}}<small>Wake at {{(.Until.In $.Location).Format "02 Jan 2006, 15:04 MST"}}</small>{{end}}</article>
       {{end}}</section>{{else}}<section class="panel empty"><span class="empty-symbol"><i aria-hidden="true" class="icon inbox"></i></span><h2>No signals in this view</h2><p>Incoming mail and scheduled signals appear here while awaiting a decision.</p></section>{{end}}
+    {{else if eq .Path "/chat"}}
+      {{if .Older}}<a class="history-link" href="/chat?before={{.Older}}">Earlier messages</a>{{end}}
+      <section id="conversation" class="conversation" aria-label="Conversation" aria-live="polite">
+        {{range .Chat}}
+        <article class="bubble {{.Role}}">
+          <header><strong>{{if eq .Role "user"}}You{{else if eq .Role "notification"}}aloop · Notification{{else}}aloop{{end}}</strong><time>{{(.Sent.In $.Location).Format "02 Jan · 15:04"}}</time></header>
+          {{with index $.Quotes .ID}}<blockquote>{{.}}</blockquote>{{end}}
+          <p>{{.Text}}</p>
+          {{if .Pending}}<small>Waiting for aloop…</small>{{else}}<a href="/chat?reply={{.ID}}#compose">Reply</a>{{end}}
+        </article>
+        {{else}}<div class="panel empty"><h2>Start a conversation</h2><p>Ask aloop a question, or reply to a notification to read its source email.</p></div>{{end}}
+      </section>
+      <form method="post" action="/chat" class="panel compose" id="compose">
+        {{if .Reply}}<div class="reply-context"><strong>Replying to {{if eq .Reply.Role "user"}}you{{else}}aloop{{end}}</strong><p>{{.Reply.Text}}</p><a href="/chat#compose">Cancel reply</a></div><input type="hidden" name="reply" value="{{.Reply.ID}}">{{end}}
+        <input type="hidden" name="request" value="{{.RequestID}}">
+        <label for="chat-message">Message aloop</label>
+        <textarea id="chat-message" name="message" rows="2" maxlength="4096" required placeholder="Ask a question…"></textarea>
+        <button type="submit">Send</button>
+      </form>
     {{else}}
-      {{if .Messages}}<section class="panel feed" aria-label="Latest notifications">{{range .Messages}}<article><div class="item-head"><span class="item-source"><i aria-hidden="true" class="icon bell"></i>Notification</span><time>{{(.Sent.In $.Location).Format "02 Jan 2006, 15:04 MST"}}</time></div><p>{{.Message}}</p></article>{{end}}</section>
+      {{if .Messages}}<section class="panel feed" aria-label="Latest notifications">{{range .Messages}}<article><div class="item-head"><span class="item-source"><i aria-hidden="true" class="icon bell"></i>Notification</span><time>{{(.Sent.In $.Location).Format "02 Jan 2006, 15:04 MST"}}</time></div><p>{{.Message}}</p><a class="reply-link" href="/chat?reply=note:{{.Key}}#compose">Reply in chat <i aria-hidden="true" class="icon right"></i></a></article>{{end}}</section>
       {{else}}<section class="panel empty"><span class="empty-symbol"><i aria-hidden="true" class="icon bell"></i></span><h2>No notifications yet</h2><p>Daily digests and updates sent by the agent appear here.</p></section>{{end}}
     {{end}}
   </main>

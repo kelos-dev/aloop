@@ -301,7 +301,7 @@ func TestInboxStatusIncludesDeferredSignalsAndEffectCounts(t *testing.T) {
 	if err := inbox.settle(time.Now(), []string{"day:1"}, []Deferral{{ID: "mail:1"}}); err != nil {
 		t.Fatal(err)
 	}
-	if err := inbox.record("digest-notification", Receipt{Entry: "day:1", Tool: "notify"}); err != nil {
+	if err := inbox.record("digest-notification", Receipt{Entry: "day:1", Tool: "notify"}, nil); err != nil {
 		t.Fatal(err)
 	}
 	status, err := inbox.Status()

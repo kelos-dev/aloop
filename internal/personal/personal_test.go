@@ -4,6 +4,7 @@ import (
 	"bytes"
 	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
@@ -278,5 +279,41 @@ func TestRecentNotifications(t *testing.T) {
 	got, err := notes.Recent(2)
 	if err != nil || len(got) != 2 || got[0].Message != "third" || got[1].Message != "second" || !got[0].Sent.Equal(time.Unix(3, 0)) {
 		t.Fatalf("recent = %+v, err = %v", got, err)
+	}
+}
+
+func TestMaildirReadByMessageID(t *testing.T) {
+	root := t.TempDir()
+	for _, dir := range []string{"new", "cur"} {
+		if err := os.Mkdir(filepath.Join(root, dir), 0700); err != nil {
+			t.Fatal(err)
+		}
+	}
+	for path, content := range map[string]string{
+		"new/broken":     "Content-Type: text/plain; charset=not-a-real-charset\r\n\r\nmalformed",
+		"new/decoy":      "Message-ID: <other@example.org>\r\n\r\nUnrelated.",
+		"cur/target:2,S": "Message-ID: <target@example.org>\r\n\r\nMeeting at noon.",
+	} {
+		if err := os.WriteFile(filepath.Join(root, path), []byte(content), 0600); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if _, err := readMail(filepath.Join(root, "new", "broken")); err == nil {
+		t.Fatal("expected malformed fixture to fail parsing")
+	}
+	mail, err := OpenMaildir(root)
+	if err != nil {
+		t.Fatal(err)
+	}
+	read := func(id string) (string, error) {
+		return mail.Read(t.Context(), aloop.Call{Entry: aloop.Entry{ID: "email:" + id, Source: "email"}})
+	}
+	text, err := read("target@example.org")
+	if err != nil || !strings.Contains(text, "Meeting at noon.") {
+		t.Fatalf("read target: %q %v", text, err)
+	}
+	var missing aloop.ToolError
+	if _, err = read("missing@example.org"); !errors.As(err, &missing) {
+		t.Fatalf("expected a worker-visible missing message, got %v", err)
 	}
 }

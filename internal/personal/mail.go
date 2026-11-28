@@ -155,17 +155,27 @@ func (m *Maildir) Read(ctx context.Context, c aloop.Call) (string, error) {
 	if c.Entry.Source != "email" {
 		return "", aloop.ToolError("read_email requires an email entry")
 	}
+	matchID := c.Entry.Ref == "" && strings.HasPrefix(c.Entry.ID, "email:")
 	for _, dir := range []string{"new", "cur"} {
 		files, err := os.ReadDir(filepath.Join(m.root, dir))
 		if err != nil {
 			return "", err
 		}
 		for _, f := range files {
+			if err := ctx.Err(); err != nil {
+				return "", err
+			}
 			key, _, _ := strings.Cut(f.Name(), ":2,")
-			if key == c.Entry.Ref && f.Type().IsRegular() {
+			if (key == c.Entry.Ref || matchID) && f.Type().IsRegular() {
 				msg, err := readMail(filepath.Join(m.root, dir, f.Name()))
 				if err != nil {
+					if matchID || errors.Is(err, os.ErrNotExist) {
+						continue
+					}
 					return "", err
+				}
+				if strings.HasPrefix(c.Entry.ID, "email:") && c.Entry.ID != "email:"+msg.id {
+					continue
 				}
 				return msg.text(), nil
 			}

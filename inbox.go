@@ -42,7 +42,7 @@ func OpenInbox(path string) (*Inbox, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, key := range [][]byte{entries, seen, receipts, cursors} {
+		for _, key := range [][]byte{entries, seen, receipts, cursors, chatLog, chatIDs, chatQueue} {
 			if _, err := tx.CreateBucketIfNotExists(key); err != nil {
 				return err
 			}
@@ -120,10 +120,7 @@ func (i *Inbox) append(source, cursor string, batch []Entry) error {
 		return nil
 	})
 	if err == nil && added {
-		select {
-		case i.wake <- struct{}{}:
-		default:
-		}
+		i.wakeAgent()
 	}
 	return err
 }
@@ -210,12 +207,19 @@ func (i *Inbox) receipt(key string) (Receipt, bool, error) {
 	return r, found, err
 }
 
-func (i *Inbox) record(key string, r Receipt) error {
+func (i *Inbox) record(key string, r Receipt, note *ChatMessage) error {
 	data, err := json.Marshal(r)
 	if err != nil {
 		return err
 	}
-	return i.db.Update(func(tx *bolt.Tx) error { return tx.Bucket(receipts).Put([]byte(key), data) })
+	return i.db.Update(func(tx *bolt.Tx) error {
+		if note != nil {
+			if err := putChat(tx, *note); err != nil {
+				return err
+			}
+		}
+		return tx.Bucket(receipts).Put([]byte(key), data)
+	})
 }
 
 // InboxStatus describes the durable signals and completed effects in one read transaction.
