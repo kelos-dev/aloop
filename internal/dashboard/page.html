@@ -51,6 +51,17 @@
         </section>
       </div>
     {{else if eq .Path "/inbox"}}
+      {{if .GoogleConfigured}}
+      <section class="panel google" aria-labelledby="gmail-title">
+        <header><h2 id="gmail-title"><i aria-hidden="true" class="icon mail"></i> Gmail</h2><span class="tag">{{if .GoogleEmail}}Connected{{else}}Not connected{{end}}</span></header>
+        <p>{{if .GoogleEmail}}{{.GoogleEmail}} · {{if .DriveConnected}}Gmail and Google Docs{{else}}Gmail only{{end}}{{else}}Connect your inbox so aloop can review incoming mail.{{end}}</p>
+        <form method="post" action="/oauth/google/connect">
+          <label><input type="checkbox" name="drive" {{if .DriveConnected}}checked{{end}}> Also allow reading linked Google Docs</label>
+          <button type="submit">{{if .GoogleEmail}}Reconnect with Google{{else}}Connect with Google{{end}}</button>
+        </form>
+        {{if .GoogleMessage}}<p role="status">{{.GoogleMessage}}</p>{{end}}
+      </section>{{else}}
+      <section class="panel google"><header><h2><i aria-hidden="true" class="icon mail"></i> Gmail</h2></header><p>Configure a Google OAuth web client to enable account connection.</p></section>{{end}}
       <div class="filters" aria-label="Filter signals">
         <a href="/inbox" {{if eq .Filter ""}}aria-current="true"{{end}}>All <b>{{.Pending}}</b></a>
         <a href="/inbox?state=pending" {{if eq .Filter "pending"}}aria-current="true"{{end}}>Pending</a>

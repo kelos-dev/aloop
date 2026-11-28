@@ -34,6 +34,7 @@ type Inbox struct {
 var entries = []byte("pending")
 var seen = []byte("received")
 var receipts = []byte("receipts")
+var cursors = []byte("cursors")
 
 func OpenInbox(path string) (*Inbox, error) {
 	db, err := bolt.Open(path, 0600, &bolt.Options{Timeout: time.Second})
@@ -41,7 +42,7 @@ func OpenInbox(path string) (*Inbox, error) {
 		return nil, err
 	}
 	err = db.Update(func(tx *bolt.Tx) error {
-		for _, key := range [][]byte{entries, seen, receipts} {
+		for _, key := range [][]byte{entries, seen, receipts, cursors} {
 			if _, err := tx.CreateBucketIfNotExists(key); err != nil {
 				return err
 			}
@@ -66,7 +67,29 @@ func (i *Inbox) Received(id string) (bool, error) {
 
 // Append commits the batch before waking the scheduler. IDs are unique across sources.
 func (i *Inbox) Append(batch ...Entry) error {
-	if len(batch) == 0 {
+	return i.append("", "", batch)
+}
+
+// Cursor returns a source's last committed position, or an empty string on first use.
+func (i *Inbox) Cursor(source string) (string, error) {
+	var cursor string
+	err := i.db.View(func(tx *bolt.Tx) error {
+		cursor = string(tx.Bucket(cursors).Get([]byte(source)))
+		return nil
+	})
+	return cursor, err
+}
+
+// AppendWithCursor commits signals and their source position in the same transaction.
+func (i *Inbox) AppendWithCursor(source, cursor string, batch ...Entry) error {
+	if source == "" || cursor == "" {
+		return errors.New("source and cursor required")
+	}
+	return i.append(source, cursor, batch)
+}
+
+func (i *Inbox) append(source, cursor string, batch []Entry) error {
+	if len(batch) == 0 && source == "" {
 		return nil
 	}
 	added := false
@@ -90,6 +113,9 @@ func (i *Inbox) Append(batch ...Entry) error {
 				return err
 			}
 			added = true
+		}
+		if source != "" {
+			return tx.Bucket(cursors).Put([]byte(source), []byte(cursor))
 		}
 		return nil
 	})

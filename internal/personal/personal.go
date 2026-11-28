@@ -97,10 +97,40 @@ func (n *Notifications) Send(ctx context.Context, c aloop.Call) (string, error) 
 	return name, nil
 }
 
-func Tools(m *Maildir, t *Tasks, n *Notifications) []aloop.Tool {
+type MailSources struct {
+	Maildir *Maildir
+	Google  *GoogleConnection
+}
+
+func (m MailSources) read(ctx context.Context, c aloop.Call) (string, error) {
+	if c.Entry.Source != "email" {
+		return "", aloop.ToolError("read_email requires an email entry")
+	}
+	if strings.HasPrefix(c.Entry.ID, "gmail:") {
+		if account := m.Google.Current(); account != nil {
+			return account.readGmail(ctx, c)
+		}
+	} else if m.Maildir != nil {
+		return m.Maildir.Read(ctx, c)
+	}
+	return "", aloop.ToolError("the mail source for this message is disconnected")
+}
+
+func (m MailSources) readDoc(ctx context.Context, c aloop.Call) (string, error) {
+	account := m.Google.Current()
+	if account == nil || !account.drive {
+		return "", aloop.ToolError("Google Drive access has not been granted")
+	}
+	return account.readDoc(ctx, c)
+}
+
+func Tools(m MailSources, t *Tasks, n *Notifications) []aloop.Tool {
 	tools := []aloop.Tool{
-		{Name: "read_email", Description: "Read the referenced email", Run: m.Read},
+		{Name: "read_email", Description: "Read the referenced email", Run: m.read},
 		{Name: "notify", Description: "Send the user a text notification", Parameters: []string{"message"}, Effect: true, Run: n.Send},
+	}
+	if m.Google != nil {
+		tools = append(tools, aloop.Tool{Name: "read_google_doc", Description: "Read the text of a Google Doc by its Drive file ID from a document link", Parameters: []string{"id"}, Run: m.readDoc})
 	}
 	if t == nil {
 		return tools

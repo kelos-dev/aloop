@@ -77,6 +77,7 @@ else
   }
   copy_secret aloop-credentials aloop-CODEX_AUTH_JSON CODEX_AUTH_JSON
   copy_secret aloop-credentials aloop-ALOOP_WEB_PASSWORD ALOOP_WEB_PASSWORD
+  copy_secret aloop-credentials aloop-GOOGLE_OAUTH_CLIENT_JSON GOOGLE_OAUTH_CLIENT_JSON
   copy_secret aloop-codex-recovery aloop-refresh
   # Check the login before stopping the source, including for cluster-managed credentials.
   "${target_k[@]}" get secret aloop-credentials -o json | jq -e '.data.CODEX_AUTH_JSON | length > 0' >/dev/null

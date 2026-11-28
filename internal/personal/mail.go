@@ -43,14 +43,26 @@ type mailMessage struct {
 	id, from, subject, body, date string
 }
 
+func (m mailMessage) text() string {
+	header := fmt.Sprintf("From: %s\nSubject: %s", m.from, m.subject)
+	if m.date != "" {
+		header += "\nDate: " + m.date
+	}
+	return header + "\n\n" + m.body
+}
+
 func readMail(path string) (mailMessage, error) {
-	var message mailMessage
 	f, err := os.Open(path)
 	if err != nil {
 		return mailMessage{}, err
 	}
 	defer f.Close()
-	m, err := mail.CreateReader(f)
+	return parseMail(f)
+}
+
+func parseMail(r io.Reader) (mailMessage, error) {
+	var message mailMessage
+	m, err := mail.CreateReader(r)
 	if err != nil {
 		return mailMessage{}, err
 	}
@@ -155,11 +167,7 @@ func (m *Maildir) Read(ctx context.Context, c aloop.Call) (string, error) {
 				if err != nil {
 					return "", err
 				}
-				header := fmt.Sprintf("From: %s\nSubject: %s", msg.from, msg.subject)
-				if msg.date != "" {
-					header += "\nDate: " + msg.date
-				}
-				return header + "\n\n" + msg.body, nil
+				return msg.text(), nil
 			}
 		}
 	}

@@ -33,15 +33,16 @@ type modelConfig struct {
 }
 
 type config struct {
-	Prompt        string      `json:"prompt"`
-	Triage        modelConfig `json:"triage"`
-	Worker        modelConfig `json:"worker"`
-	Maildir       string      `json:"maildir"`
-	Inbox         string      `json:"inbox"`
-	Notifications string      `json:"notifications"`
-	Timezone      string      `json:"timezone"`
-	DailyAt       string      `json:"daily_at"`
-	WebListen     string      `json:"web_listen"`
+	GoogleRedirectURL string      `json:"google_redirect_url"`
+	Prompt            string      `json:"prompt"`
+	Triage            modelConfig `json:"triage"`
+	Worker            modelConfig `json:"worker"`
+	Maildir           string      `json:"maildir"`
+	Inbox             string      `json:"inbox"`
+	Notifications     string      `json:"notifications"`
+	Timezone          string      `json:"timezone"`
+	DailyAt           string      `json:"daily_at"`
+	WebListen         string      `json:"web_listen"`
 }
 
 func cliEnvironment() []string {
@@ -160,8 +161,9 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 	if dec.Decode(new(any)) != io.EOF {
 		return errors.New("trailing configuration data")
 	}
-	if interval <= 0 || cfg.Inbox == "" || cfg.Maildir == "" || cfg.Timezone == "" {
-		return errors.New("positive poll interval, inbox, maildir and timezone required")
+	googleClient := os.Getenv("GOOGLE_OAUTH_CLIENT_JSON")
+	if interval <= 0 || cfg.Inbox == "" || cfg.Timezone == "" || (cfg.Maildir == "" && googleClient == "") {
+		return errors.New("positive poll interval, inbox, timezone and a mail source required")
 	}
 	zone, err := time.LoadLocation(cfg.Timezone)
 	if err != nil {
@@ -179,9 +181,19 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 	if err != nil {
 		return err
 	}
-	m, err := personal.OpenMaildir(cfg.Maildir)
-	if err != nil {
-		return err
+	var m *personal.Maildir
+	if cfg.Maildir != "" {
+		m, err = personal.OpenMaildir(cfg.Maildir)
+		if err != nil {
+			return err
+		}
+	}
+	var google *personal.GoogleConnection
+	if googleClient != "" {
+		google, err = personal.OpenGoogleConnection(ctx, googleClient, cfg.GoogleRedirectURL, cfg.Inbox+".google.json", &http.Client{Timeout: 30 * time.Second})
+		if err != nil {
+			return err
+		}
 	}
 	var tasks *personal.Tasks
 	if token := os.Getenv("TODOIST_API_TOKEN"); token != "" {
@@ -199,21 +211,25 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 		return err
 	}
 	defer inbox.Close()
-	agent, err := aloop.New(inbox, cfg.Prompt, zone, triage, worker, personal.Tools(m, tasks, notifications)...)
+	tools := personal.Tools(personal.MailSources{Maildir: m, Google: google}, tasks, notifications)
+	agent, err := aloop.New(inbox, cfg.Prompt, zone, triage, worker, tools...)
 	if err != nil {
 		return err
 	}
 	collect := func() error {
-		mail, err := m.Collect(ctx, inbox)
+		var mail []aloop.Entry
+		var mailErr, googleErr error
+		if m != nil {
+			mail, mailErr = m.Collect(ctx, inbox)
+		}
+		if account := google.Current(); account != nil {
+			googleErr = account.Collect(ctx, inbox)
+		}
 		batch := append(mail, personal.Daily(time.Now().In(zone), at.Hour(), at.Minute())...)
-		return errors.Join(err, inbox.Append(batch...))
+		return errors.Join(mailErr, googleErr, inbox.Append(batch...))
 	}
-	first := collect()
 	if once {
-		return errors.Join(first, agent.RunOnce(ctx))
-	}
-	if first != nil {
-		slog.Error("Signal collection failed", "error", first)
+		return errors.Join(collect(), agent.RunOnce(ctx))
 	}
 	ctx, cancel := context.WithCancelCause(ctx)
 	defer cancel(nil)
@@ -223,7 +239,7 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 			return err
 		}
 		server := &http.Server{
-			Handler:           dashboard.Handler(inbox, notifications, zone, cfg.DailyAt, os.Getenv("ALOOP_WEB_PASSWORD")),
+			Handler:           dashboard.Handler(inbox, notifications, zone, cfg.DailyAt, os.Getenv("ALOOP_WEB_PASSWORD"), google),
 			ReadHeaderTimeout: 5 * time.Second, WriteTimeout: 15 * time.Second, IdleTimeout: time.Minute,
 		}
 		defer func() {
@@ -239,6 +255,9 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 			}
 		}()
 		slog.Info("Dashboard listening", "address", listener.Addr())
+	}
+	if err := collect(); err != nil {
+		slog.Error("Signal collection failed", "error", err)
 	}
 	stopped := make(chan struct{})
 	go func() {

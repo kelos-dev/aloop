@@ -5,6 +5,7 @@
   "notifications": "/var/lib/aloop/notifications",
   "timezone": "Etc/UTC",
   "daily_at": "09:00",
+  "google_redirect_url": "https://dev-aloop.kelos.dev/oauth/google/callback",
   "web_listen": ":8080",
   "triage": {"provider": "openai-decisions", "codex_home": "/var/lib/aloop/codex"},
   "worker": {"provider": "codex", "codex_home": "/var/lib/aloop/codex"}

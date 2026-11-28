@@ -83,6 +83,7 @@ jobs:
           IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           ALOOP_WEB_PASSWORD: ${{ secrets.ALOOP_WEB_PASSWORD }}
+          GOOGLE_OAUTH_CLIENT_JSON: ${{ secrets.GOOGLE_OAUTH_CLIENT_JSON }}
           DEV_CLUSTER_KUBECONFIG: ${{ secrets.DEV_CLUSTER_KUBECONFIG }}
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}

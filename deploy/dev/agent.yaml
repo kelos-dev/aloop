@@ -60,6 +60,12 @@ spec:
                   name: aloop-credentials
                   key: ALOOP_WEB_PASSWORD
                   optional: true
+            - name: GOOGLE_OAUTH_CLIENT_JSON
+              valueFrom:
+                secretKeyRef:
+                  name: aloop-credentials
+                  key: GOOGLE_OAUTH_CLIENT_JSON
+                  optional: true
           volumeMounts:
             - name: config
               mountPath: /etc/aloop
