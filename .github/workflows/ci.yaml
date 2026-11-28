@@ -42,13 +42,21 @@ jobs:
           kind load docker-image "$image"
           CODEX_AUTH_JSON=$(node ../../.github/tests/codex-oauth.cjs seed)
           export CODEX_AUTH_JSON
-          ALOOP_WEB_PASSWORD=test bash prepare-credentials.sh default
+          export ALOOP_WEB_PASSWORD=test
           kustomize edit add patch --kind Deployment --name aloop --patch \
             '[{"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"HTTPS_PROXY","value":"http://127.0.0.1:1"}},
               {"op":"add","path":"/spec/template/spec/containers/0/env/-","value":{"name":"PATH","value":"/tmp/oauth-test:/usr/local/bin:/usr/bin:/bin"}}]'
           kustomize edit set image "ghcr.io/kelos-dev/aloop=$image"
-          kubectl apply -k .
-          kubectl rollout status deployment/aloop --timeout=3m
+          # An incomplete claim needs its source before an agent can use it.
+          kubectl create namespace aloop
+          kubectl annotate --local -f data.yaml aloop.kelos.dev/copy-source=missing -o json |
+            kubectl -n aloop create -f -
+          if bash deploy.sh aloop > "$RUNNER_TEMP/missing-source.log" 2>&1; then exit 1; fi
+          grep -F 'The source deployment is missing before the data copy completed' "$RUNNER_TEMP/missing-source.log"
+          test -z "$(kubectl -n aloop get deployment aloop --ignore-not-found -o name)"
+          kubectl delete namespace aloop --timeout=2m
+
+          bash deploy.sh default
           node_ip=$(kubectl get node kind-control-plane -o jsonpath='{.status.addresses[?(@.type=="InternalIP")].address}')
           url="http://$node_ip:30086"
           curl -fsS --retry 5 --retry-all-errors "$url/" -o "$RUNNER_TEMP/overview.html"
@@ -57,6 +65,8 @@ jobs:
           curl -fsS -u aloop:test "$url/inbox" -o "$RUNNER_TEMP/inbox.html"
           grep -Fq 'Filter signals' "$RUNNER_TEMP/inbox.html"
           kubectl exec deployment/aloop -- sh -ec 'test -s inbox.db && touch Maildir/tmp/persistence-test'
+          bash ../../.github/tests/dev-namespace.sh
+          kubectl config set-context --current --namespace=aloop
           kubectl exec deployment/aloop -- /etc/aloop/codex --version
-          bash ../../.github/tests/dev-refresh.sh
+          bash ../../.github/tests/dev-refresh.sh aloop
           curl -fsS -u aloop:test "$url/inbox" -o /dev/null

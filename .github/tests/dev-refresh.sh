@@ -1,6 +1,8 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
+namespace=${1:?supply the dev namespace}
+
 kubectl exec -i deployment/aloop -- sh -ec 'mkdir /tmp/oauth-test; cat > /tmp/oauth-test/server.cjs' < ../../.github/tests/codex-oauth.cjs
 kubectl exec -i deployment/aloop -- sh -es <<'POD'
 cat > /tmp/oauth-test/codex <<'SH'
@@ -30,34 +32,35 @@ export github_login
 export -f gh
 
 # A replacement awaiting deployment must survive the scheduled job.
-if CODEX_AUTH_JSON='{"tokens":{"access_token":"different"}}' bash refresh-codex-auth.sh default; then exit 1; fi
-test -z "$(kubectl get secret aloop-codex-recovery --ignore-not-found -o name)"
+recovery_version=$(kubectl get secret aloop-codex-recovery -o jsonpath='{.metadata.resourceVersion}')
+if CODEX_AUTH_JSON='{"tokens":{"access_token":"different"}}' bash refresh-codex-auth.sh "$namespace"; then exit 1; fi
+test "$(kubectl get secret aloop-codex-recovery -o jsonpath='{.metadata.resourceVersion}')" = "$recovery_version"
 
 # A failed GitHub write must retry with the same bundle.
-if FAIL_PUBLISH=1 bash refresh-codex-auth.sh default; then exit 1; fi
+if FAIL_PUBLISH=1 bash refresh-codex-auth.sh "$namespace"; then exit 1; fi
 rotated=$(kubectl get secret aloop-codex-recovery -o json | jq -r '.data["auth.json"] | @base64d')
 jq -e '.tokens.access_token == "fixture-renewed" and .tokens.refresh_token == "fixture-rotated"' <<< "$rotated" >/dev/null
 test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$rotated"
 test "$(cat "$github_login")" = "$CODEX_AUTH_JSON"
-bash refresh-codex-auth.sh default
+bash refresh-codex-auth.sh "$namespace"
 test "$(cat "$github_login")" = "$rotated"
 
 # The next scheduled run starts with yesterday's GitHub secret while the original seed is still mounted.
 CODEX_AUTH_JSON=$(cat "$github_login")
-bash refresh-codex-auth.sh default
+bash refresh-codex-auth.sh "$namespace"
 jq -e '.tokens.access_token == "fixture-day-two-access" and .tokens.refresh_token == "fixture-day-two-refresh"' "$github_login" >/dev/null
 kubectl get secret aloop-codex-recovery -o json | jq -j '.data["auth.json"] | @base64d' | cmp - "$github_login"
 kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json | cmp - "$github_login"
 rotated=$(cat "$github_login")
 CODEX_AUTH_JSON=$rotated
-if bash refresh-codex-auth.sh default; then exit 1; fi
+if bash refresh-codex-auth.sh "$namespace"; then exit 1; fi
 test "$(kubectl get secret aloop-codex-recovery -o json | jq -r '.data["auth.json"] | @base64d')" = "$rotated"
 test "$(cat "$github_login")" = "$rotated"
 
 # Redeploying the mirrored secret must preserve a newer login on the volume.
 newer=$(jq -c '.tokens.access_token = "renewed-by-worker"' <<< "$rotated")
 printf '%s' "$newer" | kubectl exec -i deployment/aloop -- sh -ec 'cat > "$CODEX_HOME/auth.json"'
-bash prepare-credentials.sh default
+bash prepare-credentials.sh "$namespace"
 kubectl apply -k .
 kubectl rollout status deployment/aloop --timeout=3m
 kubectl exec deployment/aloop -- test -f Maildir/tmp/persistence-test
@@ -67,7 +70,7 @@ kubectl rollout restart deployment/aloop
 kubectl rollout status deployment/aloop --timeout=3m
 test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$rotated"
 export CODEX_AUTH_JSON='{"tokens":{"access_token":"replacement-fixture"}}'
-bash prepare-credentials.sh default
+bash prepare-credentials.sh "$namespace"
 kubectl apply -k .
 kubectl rollout status deployment/aloop --timeout=3m
 test "$(kubectl exec deployment/aloop -- cat /var/lib/aloop/codex/auth.json)" = "$CODEX_AUTH_JSON"

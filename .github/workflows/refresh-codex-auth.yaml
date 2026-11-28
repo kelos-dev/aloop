@@ -40,7 +40,7 @@ jobs:
         env:
           GH_TOKEN: ${{ steps.secret-manager.outputs.token }}
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
-          ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'default' }}
+          ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'aloop' }}
           DEV_CLUSTER_KUBECONFIG: ${{ secrets.DEV_CLUSTER_KUBECONFIG }}
           TUNNEL_SERVICE_TOKEN_ID: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_ID }}
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}

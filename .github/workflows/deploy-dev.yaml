@@ -79,7 +79,7 @@ jobs:
         if: steps.revision.outputs.current == 'true'
         working-directory: deploy/dev
         env:
-          ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'default' }}
+          ALOOP_NAMESPACE: ${{ vars.ALOOP_NAMESPACE || 'aloop' }}
           IMAGE_DIGEST: ${{ needs.publish.outputs.digest }}
           CODEX_AUTH_JSON: ${{ secrets.CODEX_AUTH_JSON }}
           ALOOP_WEB_PASSWORD: ${{ secrets.ALOOP_WEB_PASSWORD }}
@@ -88,12 +88,8 @@ jobs:
           TUNNEL_SERVICE_TOKEN_SECRET: ${{ secrets.CLOUDFLARE_ACCESS_CLIENT_SECRET }}
         run: |
           [[ "$IMAGE_DIGEST" =~ ^sha256:[0-9a-f]{64}$ ]]
-          bash with-cluster.sh bash -euo pipefail -c '
-            bash prepare-credentials.sh "$ALOOP_NAMESPACE"
-            kustomize edit set image "ghcr.io/kelos-dev/aloop=ghcr.io/kelos-dev/aloop@$IMAGE_DIGEST"
-            kubectl -n "$ALOOP_NAMESPACE" apply -k .
-            kubectl -n "$ALOOP_NAMESPACE" rollout status deployment/aloop --timeout=5m
-          '
+          kustomize edit set image "ghcr.io/kelos-dev/aloop=ghcr.io/kelos-dev/aloop@$IMAGE_DIGEST"
+          bash with-cluster.sh bash deploy.sh "$ALOOP_NAMESPACE"
       - name: Check the dev frontend
         if: steps.revision.outputs.current == 'true'
         run: |
