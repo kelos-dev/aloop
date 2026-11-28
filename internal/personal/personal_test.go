@@ -148,7 +148,7 @@ func TestE2EDeadlineChangeAndDigest(t *testing.T) {
 			return nil, nil
 		}
 	})
-	agent, err := aloop.New(inbox, "Manage deadlines", time.UTC, aloop.PromptTriage(triage), worker, Tools(mailbox, tasks, notifications)...)
+	agent, err := aloop.New(inbox, "Manage deadlines", time.UTC, aloop.PromptTriage(triage), worker, Tools(MailSources{Maildir: mailbox}, tasks, notifications)...)
 	if err != nil {
 		t.Fatal(err)
 	}

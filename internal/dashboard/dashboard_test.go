@@ -52,7 +52,7 @@ func TestDashboardViews(t *testing.T) {
 		{"/unknown", "", "", 404, "404", "Agent overview"},
 	} {
 		t.Run(tt.path+"/"+tt.supplied, func(t *testing.T) {
-			handler := Handler(inbox, notes, time.UTC, "09:00", tt.password)
+			handler := Handler(inbox, notes, time.UTC, "09:00", tt.password, nil)
 			request := httptest.NewRequest(http.MethodGet, tt.path, nil)
 			if tt.supplied != "" {
 				request.SetBasicAuth("aloop", tt.supplied)

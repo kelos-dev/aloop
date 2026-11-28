@@ -6,7 +6,7 @@ For example, a reply that moves a deadline and a daily timer can wake the same a
 
 ## Run the personal agent
 
-The supplied command reads a local Maildir and prints notifications to stdout. Each notification also has a durable text file in the configured directory. Set `TODOIST_API_TOKEN` if you want the agent to list, create, and update Todoist tasks. The first collection includes existing mail in both `new` and `cur`. Choose a Maildir containing the messages you want the agent to handle.
+The supplied command reads Gmail, a local Maildir, or both, and prints notifications to stdout. Each notification also has a durable text file in the configured directory. Set `TODOIST_API_TOKEN` if you want the agent to list, create, and update Todoist tasks. The first Maildir collection includes existing mail in both `new` and `cur`. Choose a Maildir containing the messages you want the agent to handle.
 
 Install Go 1.25 or later and sign in to the Codex CLI with file credential storage. Save this configuration as `aloop.json`, using your own Maildir path, time zone, and Codex home.
 
@@ -35,6 +35,22 @@ go run ./cmd/aloop -config aloop.json
 ```
 
 The first command collects available signals and runs one snapshot, including any selected tool actions. The second keeps running. The poll interval defaults to 30 seconds. On the first poll at or after the configured local time, the scheduler emits that day's digest signal. Its stable date key prevents duplicates across restarts. Both models receive the current time in the configured time zone.
+
+### Connect Gmail and optional Google Drive
+
+Open the private **Signal inbox**, choose **Connect with Google**, and approve read access to Gmail. Select **Also allow reading linked Google Docs** before connecting if you want the worker to read Docs. The inbox shows the connected account and granted access after Google redirects you back. You can reconnect from the same panel. [Dev signal inbox](https://dev-aloop.kelos.dev/inbox)
+
+The operator configures a Google OAuth application once:
+
+1. In Google Cloud, enable the **Gmail API** and optionally the **Google Drive API**. Configure the consent screen and add your account as a test user if the app is in Testing.
+2. Create a **Web application** OAuth client. Add `https://dev-aloop.kelos.dev/oauth/google/callback` as an authorized redirect URI, save, and download the client JSON. [Google Cloud credentials](https://console.cloud.google.com/apis/credentials)
+3. In the repository settings, open **Environments → dev → Environment secrets**. Save the downloaded Web application JSON as `GOOGLE_OAUTH_CLIENT_JSON`. Deploy the PR on merge, or rerun **Deploy to Dev** on main after changing the setting.
+
+For local use, set `google_redirect_url` to a registered callback such as `http://localhost:8080/oauth/google/callback`, set `web_listen`, supply the client JSON through `GOOGLE_OAUTH_CLIENT_JSON`, and set the dashboard password. You can omit `maildir` when Google is configured.
+
+The first grant records the current Gmail mailbox position. Subsequent mail provides short signals to triage. The worker can fetch a body with `read_email` and, with Drive consent, export text by Google Doc ID with `read_google_doc`. The configured model providers receive those summaries and any content fetched during a run. Inbox cursors survive restarts. If Gmail expires a cursor, aloop checks inbox messages received since the saved position.
+
+aloop stores the offline grant in a mode-0600 file beside the inbox database on its persistent volume. Access tokens refresh automatically. If Google expires or revokes the grant, use **Reconnect with Google**. External apps in Testing typically receive seven-day refresh tokens. [Google web authorization](https://developers.google.com/identity/protocols/oauth2/web-server) · [Google token expiration](https://developers.google.com/identity/protocols/oauth2#expiration)
 
 ### Web dashboard
 
@@ -77,7 +93,7 @@ Use a stable, source-qualified ID per occurrence. A later reply gets its own ID.
 
 - If triage selects no work, aloop settles its dismissals and deferrals. If any entry needs work, the worker receives the whole snapshot and the recommendations. It resolves every entry so a timer and the records needed for its digest can be handled together. Deferred entries stay pending until another signal or a specified time makes the inbox eligible again. Deferring an entry again without specifying a new time preserves a wake time still outstanding at the start of the run. Duplicate delivery of a handled entry does not wake the agent.
 - The worker can use multiple tools before reporting which entries are done or deferred. Only IDs from the worker's batch can be resolved. A single worker runs at a time and has a limit of 32 model steps per run.
-- The local bbolt database stores pending summaries and references, received IDs, and effect receipts. Mail bodies and the authoritative task list stay in Maildir and Todoist. Read-tool results are scoped to the worker run.
+- The local bbolt database stores pending summaries and references, source cursors, received IDs, and effect receipts. Mail bodies, Google Docs, and the authoritative task list stay in their source systems. Read-tool results are scoped to the worker run.
 - Each effect tool may act once per entry. Retrying the same call returns its saved result. A conflicting call fails. A destination that honors the stable operation key also covers the crash window between a successful external write and the local receipt.
 - Tools can return an `aloop.ToolError` with an actionable message that is safe for the worker to see. The worker can recover or defer the affected entry and continue other work. Model, storage and other unhandled errors leave unfinished entries pending. Continuous mode retries on the next wake or poll. One-shot mode reports the error and exits.
 

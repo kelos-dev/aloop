@@ -117,7 +117,7 @@ Confirm actual changes immediately with the task title and due date in YYYY-MM-D
 Ignore advertisements. Save routine office updates for the daily digest.
 When the digest is due, send one digest with the current tasks and dates plus any office delivery reference.
 Use the source records for exact details.`
-	agent, err := aloop.New(inbox, prompt, time.UTC, triage, worker, Tools(mailbox, tasks, notifications)...)
+	agent, err := aloop.New(inbox, prompt, time.UTC, triage, worker, Tools(MailSources{Maildir: mailbox}, tasks, notifications)...)
 	if err != nil {
 		t.Fatal(err)
 	}
