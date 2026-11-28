@@ -58,6 +58,14 @@ Set `"web_listen": "127.0.0.1:8080"` in the configuration and start aloop in con
 
 The overview is public. To enable the personal views, supply `ALOOP_WEB_PASSWORD` and sign in with username `aloop` over localhost or HTTPS. **Signal inbox** shows summaries and deferred signals. **Notifications** shows the 30 most recent messages saved by the agent.
 
+### Chat and notification replies
+
+Open **Chat** in the private dashboard to ask aloop a question. Choose **Reply in chat** on a notification to include that notification and its email references. For example, after a deadline alert you can ask “What exactly did Maya say?” and aloop can fetch the original from Gmail or Maildir. The configured worker receives the conversation context and any source content it reads.
+
+User messages go directly to the same worker that handles signals. Messages and pending replies survive restarts. The transcript updates automatically while the page is open. Chat can answer from the conversation and read linked emails, including emails whose signals have already been handled. Mailbox-wide search and sending mail are outside its tool set.
+
+A notification tied to an email keeps its source reference. A digest can cite multiple email entries through the worker's `email_sources` field. Existing notifications are imported on first startup. An earlier email notification can recover its source from its effect receipt; an earlier timer-only digest has only its saved text.
+
 ### Configure triage and the worker
 
 Triage defaults to `openai-decisions` when its configuration is omitted. It calls OpenAI’s `/v1/decisions` endpoint with `gpt-6-luna`. Each named choice question classifies one pending entry as `run`, `dismiss`, or `defer` using the standing prompt, time, and full snapshot as shared input. Snapshots larger than 400 entries use several requests with the same shared input. A refusal or incomplete set of answers leaves the snapshot pending for retry.
@@ -93,7 +101,7 @@ Use a stable, source-qualified ID per occurrence. A later reply gets its own ID.
 
 - If triage selects no work, aloop settles its dismissals and deferrals. If any entry needs work, the worker receives the whole snapshot and the recommendations. It resolves every entry so a timer and the records needed for its digest can be handled together. Deferred entries stay pending until another signal or a specified time makes the inbox eligible again. Deferring an entry again without specifying a new time preserves a wake time still outstanding at the start of the run. Duplicate delivery of a handled entry does not wake the agent.
 - The worker can use multiple tools before reporting which entries are done or deferred. Only IDs from the worker's batch can be resolved. A single worker runs at a time and has a limit of 32 model steps per run.
-- The local bbolt database stores pending summaries and references, source cursors, received IDs, and effect receipts. Mail bodies, Google Docs, and the authoritative task list stay in their source systems. Read-tool results are scoped to the worker run.
+- The local bbolt database stores pending summaries and references, source cursors, received IDs, and effect receipts. It also retains the private chat transcript, including notification text, user questions, assistant answers, and source-email references and summaries for handled signals. Original emails, documents, and tasks remain in their source systems. A tool read is transient, but any passage quoted in a notification or answer persists with the transcript.
 - Each effect tool may act once per entry. Retrying the same call returns its saved result. A conflicting call fails. A destination that honors the stable operation key also covers the crash window between a successful external write and the local receipt.
 - Tools can return an `aloop.ToolError` with an actionable message that is safe for the worker to see. The worker can recover or defer the affected entry and continue other work. Model, storage and other unhandled errors leave unfinished entries pending. Continuous mode retries on the next wake or poll. One-shot mode reports the error and exits.
 

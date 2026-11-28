@@ -6,6 +6,7 @@ import (
 	"crypto/sha256"
 	"crypto/subtle"
 	"embed"
+	"errors"
 	"html/template"
 	"io/fs"
 	"log/slog"
@@ -27,11 +28,15 @@ type group struct {
 }
 
 type view struct {
+	Quotes                                        map[string]string
 	Title, Path, Time, Date, Daily, Zone, Filter  string
 	Received, Pending, Handled, Deferred, Effects int
 	Sources, Actions                              []group
 	Signals                                       []aloop.PendingSignal
 	Messages                                      []personal.Notification
+	Chat                                          []aloop.ChatMessage
+	Reply                                         *aloop.ChatMessage
+	RequestID, Older                              string
 	Location                                      *time.Location
 	Locked                                        bool
 	PrivateEnabled                                bool
@@ -45,6 +50,7 @@ func Handler(inbox *aloop.Inbox, notifications *personal.Notifications, zone *ti
 	if google != nil {
 		registerGoogle(mux, google, inbox, password)
 	}
+	registerChat(mux, inbox, password)
 	assets, err := fs.Sub(files, "assets")
 	if err != nil {
 		panic(err)
@@ -53,13 +59,13 @@ func Handler(inbox *aloop.Inbox, notifications *personal.Notifications, zone *ti
 	render := func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Cache-Control", "no-store")
 		w.Header().Set("X-Content-Type-Options", "nosniff")
-		w.Header().Set("Content-Security-Policy", "default-src 'none'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'")
+		w.Header().Set("Content-Security-Policy", "default-src 'none'; script-src 'self'; connect-src 'self'; style-src 'self'; font-src 'self'; img-src 'self'; form-action 'self' https://accounts.google.com; frame-ancestors 'none'; base-uri 'none'")
 		now := time.Now().In(zone)
 		v := view{
 			Path: r.URL.Path, Date: now.Format("Mon, 02 Jan 2006"), Time: now.Format("15:04:05 MST"),
 			Daily: daily, Zone: zone.String(), Location: zone, PrivateEnabled: password != "",
 		}
-		v.Title = map[string]string{"/": "Overview", "/inbox": "Signal inbox", "/notifications": "Notifications"}[v.Path]
+		v.Title = map[string]string{"/": "Overview", "/inbox": "Signal inbox", "/notifications": "Notifications", "/chat": "Chat"}[v.Path]
 		code := http.StatusOK
 		if v.Path != "/" {
 			code = privateStatus(w, r, password)
@@ -72,7 +78,13 @@ func Handler(inbox *aloop.Inbox, notifications *personal.Notifications, zone *ti
 		}
 		var err error
 		if !v.Locked {
-			if v.Path == "/notifications" {
+			if v.Path == "/chat" {
+				err = v.loadChat(inbox, r.URL.Query())
+				if errors.Is(err, aloop.ErrChatMessage) {
+					http.NotFound(w, r)
+					return
+				}
+			} else if v.Path == "/notifications" {
 				v.Messages, err = notifications.Recent(30)
 			} else {
 				var status aloop.InboxStatus
@@ -95,7 +107,7 @@ func Handler(inbox *aloop.Inbox, notifications *personal.Notifications, zone *ti
 		w.WriteHeader(code)
 		_, _ = buf.WriteTo(w)
 	}
-	for _, pattern := range []string{"GET /{$}", "GET /inbox", "GET /notifications"} {
+	for _, pattern := range []string{"GET /{$}", "GET /inbox", "GET /notifications", "GET /chat"} {
 		mux.HandleFunc(pattern, render)
 	}
 	return mux

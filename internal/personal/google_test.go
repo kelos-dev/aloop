@@ -167,6 +167,52 @@ func TestE2EGmailSignalReadsLinkedDoc(t *testing.T) {
 		t.Fatalf("status=%+v output=%q err=%v", status, out.String(), err)
 	}
 	t.Logf("Received %d Gmail signal, read the linked Google Doc, and delivered %q", status.Received, strings.TrimSpace(out.String()))
+	thread, err := inbox.ChatMessages("", 5)
+	if err != nil || len(thread) != 1 || len(thread[0].Sources) != 1 || thread[0].Sources[0].ID != entry {
+		t.Fatalf("missing source for handled notification: %v %v", thread, err)
+	}
+	if err = inbox.SendChat("follow-up", "What was the original agenda link?", thread[0].ID); err != nil {
+		t.Fatal(err)
+	}
+	if err = inbox.Close(); err != nil {
+		t.Fatal(err)
+	}
+	inbox, err = aloop.OpenInbox(path)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer inbox.Close()
+	chatWorker := modelFunc(func(_ context.Context, _ string, input any) (json.RawMessage, error) {
+		turn := input.(map[string]any)
+		if turn["reply_target"].(*aloop.ChatMessage).Text != "Friday meeting at noon." {
+			t.Fatal("reply lost its notification")
+		}
+		results := turn["read_results"].(map[string]string)
+		if len(results) == 0 {
+			return json.Marshal(map[string]string{"read_email": entry})
+		}
+		if !strings.Contains(results[entry], "/d/agenda_1/edit") {
+			t.Fatal("original Gmail message was not retrieved")
+		}
+		return json.Marshal(map[string]string{"answer": "The email links to https://docs.google.com/document/d/agenda_1/edit"})
+	})
+	noTriage := func(context.Context, string, time.Time, []aloop.Entry) (aloop.Plan, error) {
+		t.Fatal("chat invoked signal triage")
+		return aloop.Plan{}, nil
+	}
+	agent, err = aloop.New(inbox, "Manage my mail", time.UTC, noTriage, chatWorker, Tools(MailSources{Google: g}, nil, notifications)...)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err = agent.RunOnce(t.Context()); err != nil {
+		t.Fatal(err)
+	}
+	thread, err = inbox.ChatMessages("", 10)
+	if err != nil || len(thread) != 3 || thread[1].Pending || thread[2].ReplyTo != thread[1].ID || !strings.Contains(thread[2].Text, "agenda_1") || len(thread[2].Sources) != 1 {
+		t.Fatalf("unexpected conversation: %v %v", thread, err)
+	}
+	t.Log("After restart, a direct reply retrieved the handled Gmail message and answered with its original agenda link.")
+
 }
 
 func TestGmailExpiredHistoryRetry(t *testing.T) {

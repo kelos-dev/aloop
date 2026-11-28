@@ -5,6 +5,7 @@ import (
 	"errors"
 	"fmt"
 	"io"
+	"math"
 	"os"
 	"path/filepath"
 	"regexp"
@@ -21,6 +22,7 @@ type Notifications struct {
 }
 
 type Notification struct {
+	Key     string
 	Sent    time.Time
 	Message string
 }
@@ -51,9 +53,29 @@ func (n *Notifications) Recent(limit int) ([]Notification, error) {
 		if err != nil {
 			return nil, err
 		}
-		messages = append(messages, Notification{Sent: file.ModTime(), Message: strings.TrimSuffix(string(data), "\n")})
+		messages = append(messages, Notification{Key: strings.TrimSuffix(file.Name(), ".txt"), Sent: file.ModTime(), Message: strings.TrimSuffix(string(data), "\n")})
 	}
 	return messages, nil
+}
+
+// ImportChat makes published notifications available for replies on first startup.
+func (n *Notifications) ImportChat(inbox *aloop.Inbox) error {
+	const cursor = "dashboard:notification-import"
+	done, err := inbox.Cursor(cursor)
+	if err != nil || done != "" {
+		return err
+	}
+	notes, err := n.Recent(math.MaxInt)
+	if err != nil {
+		return err
+	}
+	for j := len(notes) - 1; j >= 0; j-- {
+		m := notes[j]
+		if err := inbox.ImportNotification(m.Key, m.Message, m.Sent); err != nil {
+			return err
+		}
+	}
+	return inbox.AppendWithCursor(cursor, "complete")
 }
 
 func OpenNotifications(dir string, output io.Writer) (*Notifications, error) {

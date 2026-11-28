@@ -211,6 +211,9 @@ func run(ctx context.Context, path string, once bool, interval time.Duration) er
 		return err
 	}
 	defer inbox.Close()
+	if err := notifications.ImportChat(inbox); err != nil {
+		return err
+	}
 	tools := personal.Tools(personal.MailSources{Maildir: m, Google: google}, tasks, notifications)
 	agent, err := aloop.New(inbox, cfg.Prompt, zone, triage, worker, tools...)
 	if err != nil {
